@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+@theme inline {
+  --color-primary: #A64D25;
+  --color-primary-dark: #6B4423;
+  --color-terra: #8B6F47;
+  --color-cream: #F5E6D3;
+  --color-beige-mid: #D4A574;
+  --color-beige-light: #E8D5C4;
+  --color-brown-dark: #6B4423;
+  --color-green-forest: #4A6741;
+  --color-green-light: #6B8F5E;
+  --color-text-main: #3D2B1A;
+  --color-text-secondary: #6B4423;
+  --font-display: 'Lora', Georgia, serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #F5E6D3;
+  color: #3D2B1A;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+h1, h2, h3, .font-display {
+  font-family: 'Lora', Georgia, serif;
+}
+
+:focus-visible {
+  outline: 3px solid #A64D25;
+  outline-offset: 2px;
+}
+
+button {
+  min-width: 44px;
+}
+
+button,
+input:not([type="radio"]) {
+  min-height: 44px;
+}
+
+button:disabled {
+  opacity: 0.72;
+}
+
+.page-container {
+  width: 100%;
+  margin-inline: auto;
+  padding: 1.25rem 1rem 2rem;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 100;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: #F5E6D3;
+  color: #6B4423;
+  font-weight: 700;
+  transform: translateY(-150%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.answer-option:has(input:focus-visible) {
+  outline: 3px solid #A64D25;
+  outline-offset: 2px;
+}
+
+@media (min-width: 640px) {
+  .page-container {
+    padding: 2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #E8D5C4; }
+::-webkit-scrollbar-thumb { background: #D4A574; border-radius: 3px; }
+
+/* Progress bar animation */
+@keyframes progress-fill {
+  from { width: 0%; }
+  to { width: var(--progress-width); }
+}
+
+.progress-animated {
+  animation: progress-fill 0.8s ease-out forwards;
+}

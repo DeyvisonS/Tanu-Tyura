@@ -1,0 +1,10 @@
+{
+  "description": "A user-friendly platform for learning the Kambeba language, offering offline access to a dictionary, educational modules, and interactive activities.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
