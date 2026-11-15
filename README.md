@@ -60,8 +60,8 @@ A integração das atividades e o fluxo de armazenamento offline estão em desen
 ## Etapas em desenvolvimento
 
 * Testes integrados das atividades, correção e armazenamento dos resultados.
+* Ampliação e validação do funcionamento offline para os demais conteúdos da plataforma.
 * Incorporação dos áudios aos módulos de aprendizagem.
-* Implementação e testes do funcionamento offline.
 * Avaliação de usabilidade e acessibilidade.
 * Aprimoramento da responsividade da plataforma.
 
