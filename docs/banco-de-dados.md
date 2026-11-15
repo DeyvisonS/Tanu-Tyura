@@ -187,9 +187,9 @@ Como a correção é feita no servidor, o resultado definitivo só é apresentad
 
 A estrutura do banco foi extraída do projeto remoto com o Supabase CLI, gerando uma migração SQL versionada no repositório.
 
-O arquivo `supabase/migrations/20261017001524_remote_schema.sql` registra a estrutura do banco, incluindo tabelas, relacionamentos, funções, gatilhos e políticas de segurança identificados durante a extração.
+O arquivo `supabase/migrations/20261017001524_remote_schema.sql` registra a estrutura inicial do banco, incluindo tabelas, relacionamentos, funções, gatilhos e políticas de segurança identificados durante a extração. A migração `supabase/migrations/20261115010000_activity_correction_and_offline.sql` registra a inclusão do identificador `tentativa_uuid` e a criação da função `public.corrigir_atividade()`.
 
-O arquivo `supabase/seed.sql` contém os dados iniciais dos cinco módulos e das 43 palavras, permitindo reproduzir esses dados em outro ambiente após a criação das tabelas e das restrições correspondentes.
+O arquivo `supabase/seed.sql` contém os dados iniciais dos cinco módulos, das 43 palavras, das três atividades, das 15 questões e dos respectivos gabaritos. Os comandos de inserção foram organizados para evitar duplicação quando o arquivo for executado novamente.
 
 A migração e o arquivo de dados iniciais foram enviados ao GitHub. O `seed.sql` foi versionado, mas não foi executado novamente no banco remoto após essa etapa.
 
