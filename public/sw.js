@@ -59,24 +59,17 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     caches.open(ASSET_CACHE).then(async (cache) => {
-      const cachedResponse = await cache.match(request);
-      const networkRequest = fetch(request)
-        .then(async (response) => {
-          if (response.ok) await cache.put(request, response.clone());
-          return response;
-        })
-        .catch(() => null);
-
-      if (cachedResponse) {
-        event.waitUntil(networkRequest.then(() => undefined));
-        return cachedResponse;
+      try {
+        const response = await fetch(request);
+        if (response.ok) await cache.put(request, response.clone());
+        return response;
+      } catch {
+        const cachedResponse = await cache.match(request);
+        return cachedResponse || new Response("Recurso indisponível offline.", {
+          status: 503,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
       }
-
-      const networkResponse = await networkRequest;
-      return networkResponse || new Response("Recurso indisponível offline.", {
-        status: 503,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      });
     })
   );
 });
