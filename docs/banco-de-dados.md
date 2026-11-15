@@ -109,7 +109,7 @@ Principais campos:
 
 As alternativas são identificadas pelas letras A, B, C e D. Uma restrição verifica a presença dessas identificações no objeto JSONB, enquanto outra impede a repetição da mesma ordem dentro de uma atividade.
 
-Cada questão deve estar associada a uma atividade existente. A estrutura permite organizar várias questões em uma atividade, embora a existência de questões cadastradas para cada atividade ainda dependa da inclusão dos conteúdos.
+Cada questão está associada a uma atividade existente. Foram cadastradas 15 questões iniciais, distribuídas em três atividades, com cinco questões por nível: Fácil, Médio e Avançado. As alternativas são armazenadas no próprio registro da questão, enquanto a alternativa correta permanece separada na tabela `private.gabaritos`.
 
 As respostas corretas são armazenadas separadamente, na tabela `private.gabaritos`.
 
@@ -125,6 +125,7 @@ Principais campos:
 * `acertos`: quantidade de respostas corretas.
 * `total_questoes`: quantidade total de questões consideradas na tentativa.
 * `data_realizacao`: data e hora do registro.
+* `tentativa_uuid`: identificador UUID único da tentativa, gerado automaticamente. É utilizado para reconhecer reenvios da mesma tentativa durante a sincronização e evitar registros duplicados.
 
 A tabela possui restrições que impedem valores negativos de acertos, totais de questões menores ou iguais a zero e quantidades de acertos superiores ao total de questões.
 
@@ -166,11 +167,23 @@ Também foi habilitada a segurança em nível de linha (*Row Level Security — 
 
 Atualmente, as políticas de perfil permitem consultar e atualizar o próprio registro, além de inserir o perfil correspondente ao usuário autenticado. Para a tabela `resultados`, foi configurada a consulta dos próprios registros, enquanto a política de inserção ainda precisa ser implementada.
 
-A tabela `private.gabaritos` permanece sem acesso direto concedido aos papéis públicos da aplicação. A validação das respostas deverá ser realizada por um mecanismo seguro no servidor.
+A tabela `private.gabaritos` permanece sem acesso direto concedido aos papéis públicos da aplicação. A validação das respostas é realizada pela função `public.corrigir_atividade()`, criada com `SECURITY DEFINER`, `search_path` vazio e permissão de execução concedida somente ao papel `authenticated`. A função identifica o usuário por meio de `auth.uid()`, consulta os gabaritos no esquema privado, calcula os acertos e registra o resultado. O identificador `tentativa_uuid` permite reconhecer uma tentativa já processada e evitar gravações duplicadas.
 
 As credenciais e chaves secretas devem permanecer fora do código-fonte publicado no GitHub e não devem ser expostas no front-end.
 
-## 6. Versionamento do banco de dados
+## 6. Funcionamento offline e sincronização das atividades
+
+A estratégia definida para as atividades permite que o estudante responda às questões mesmo quando não há conexão com a internet, sem disponibilizar o gabarito no navegador.
+
+* **Service Worker:** mantém em cache o shell da aplicação e os recursos estáticos já carregados, permitindo reabrir a plataforma após o primeiro acesso online.
+* **IndexedDB:** armazena localmente a lista de atividades, as questões e suas alternativas, sem armazenar as respostas corretas. Também mantém as tentativas ainda não sincronizadas.
+* **Tentativas pendentes:** ao finalizar uma atividade offline, o navegador salva o identificador da tentativa, o usuário, a atividade e as alternativas escolhidas.
+* **Correção no servidor:** quando a conexão retorna, as respostas são enviadas à função `public.corrigir_atividade()`. O servidor consulta `private.gabaritos`, calcula a pontuação e registra o resultado em `resultados`.
+* **Prevenção de duplicidade:** o UUID de cada tentativa permite reconhecer reenvios da mesma tentativa. Após a confirmação do servidor, o registro pendente é removido do armazenamento local.
+
+Como a correção é feita no servidor, o resultado definitivo só é apresentado após a reconexão e a sincronização. O armazenamento offline precisa ser previamente preenchido durante um acesso com internet. O gabarito não é gravado no IndexedDB.
+
+## 7. Versionamento do banco de dados
 
 A estrutura do banco foi extraída do projeto remoto com o Supabase CLI, gerando uma migração SQL versionada no repositório.
 
@@ -180,7 +193,7 @@ O arquivo `supabase/seed.sql` contém os dados iniciais dos cinco módulos e das
 
 A migração e o arquivo de dados iniciais foram enviados ao GitHub. O `seed.sql` foi versionado, mas não foi executado novamente no banco remoto após essa etapa.
 
-## 7. Estado atual do desenvolvimento
+## 8. Estado atual do desenvolvimento
 
 Até o momento, foram realizadas as seguintes etapas:
 
@@ -190,13 +203,14 @@ Até o momento, foram realizadas as seguintes etapas:
 * Configuração e teste do gatilho de criação automática de perfil.
 * Cadastro dos cinco módulos de aprendizagem.
 * Cadastro das 43 palavras iniciais.
+* Cadastro de três atividades, 15 questões e 15 gabaritos.
 * Integração dos módulos e do dicionário à interface do projeto.
 * Ajuste da pesquisa do dicionário para encontrar correspondências no início do termo em Kambeba ou da tradução em português.
 * Geração da migração SQL e versionamento da estrutura e dos dados iniciais no GitHub.
 
 Permanecem como etapas de desenvolvimento a implementação das atividades e questões, a validação segura das respostas, a gravação dos resultados, a incorporação dos áudios e o funcionamento offline com armazenamento local e sincronização.
 
-## 8. Considerações finais
+## 9. Considerações finais
 
 A estrutura do banco de dados do Tanu-Tyura foi organizada para separar os dados de perfil, os conteúdos linguísticos, as atividades, as questões e os resultados. O uso de um banco relacional permite representar as associações entre essas entidades e estabelecer restrições de integridade.
 
