@@ -1,6 +1,22 @@
 import { useState, useEffect, useRef } from "react";
 import type { AuthError, Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
+import {
+  cacheActivities,
+  cacheQuestionsForActivity,
+  getCachedActivities,
+  getCachedQuestions,
+  getPendingAttempts,
+  removePendingAttempt,
+  savePendingAttempt,
+} from "./lib/activityStorage";
+import type {
+  ActivityLevelCode,
+  ActivityQuestion,
+  AnswerChoice,
+  LearningActivity,
+  PendingAttempt,
+} from "./lib/activityStorage";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,34 +92,86 @@ const getAuthErrorMessage = (error: AuthError | Error) => {
   return "Não foi possível concluir a autenticação. Tente novamente.";
 };
 
-// ─── Data ─────────────────────────────────────────────────────────────────────
+// ─── Activity helpers ──────────────────────────────────────────────────────────
 
-const questions: Record<Level, { question: string; options: string[]; correct: number }[]> = {
-  "Fácil": [
-    { question: 'Qual é a tradução de "pirá"?', options: ["peixe", "ave", "árvore", "casa"], correct: 0 },
-    { question: 'O que significa "kuarup"?', options: ["lua", "sol", "chuva", "vento"], correct: 1 },
-    { question: 'Como se diz "verde" em Kambeba?', options: ["mura", "uixí", "puku", "tuíra"], correct: 2 },
-    { question: 'Qual é a tradução de "wasi"?', options: ["fogo", "terra", "pedra", "água"], correct: 3 },
-    { question: 'O que significa "ñuká"?', options: ["obrigado", "olá / bem-vindo", "tchau", "desculpe"], correct: 1 },
-  ],
-  "Médio": [
-    { question: 'Qual é a tradução de "mukúi"?', options: ["um", "dois", "três", "quatro"], correct: 1 },
-    { question: 'O que significa "aguyje"?', options: ["bom dia", "obrigado", "com licença", "até logo"], correct: 1 },
-    { question: 'Como se diz "vermelho" em Kambeba?', options: ["puku", "uixí", "tuíra", "mura"], correct: 3 },
-    { question: 'O que significa "yané"?', options: ["eu", "você", "nós", "eles"], correct: 2 },
-    { question: 'Qual é a tradução de "ita"?', options: ["madeira", "folha", "pedra", "raiz"], correct: 2 },
-    { question: 'O que significa "ikatú"?', options: ["está bem", "está ruim", "não sei", "talvez"], correct: 0 },
-  ],
-  "Avançado": [
-    { question: 'Qual é a tradução de "irundy"?', options: ["três", "quatro", "cinco", "seis"], correct: 1 },
-    { question: 'O que significa "mukúndua"?', options: ["dois", "três", "quatro", "cinco"], correct: 1 },
-    { question: 'Como se diz "amarelo" em Kambeba?', options: ["uixí", "puku", "mura", "tuíra"], correct: 3 },
-    { question: 'O que significa "amu"?', options: ["mesmo", "outro", "igual", "diferente"], correct: 1 },
-    { question: 'Qual é a tradução de "mba\'é ré"?', options: ["bom dia", "boa noite", "como vai?", "até logo"], correct: 2 },
-    { question: 'O que significa "irurundy"?', options: ["três", "quatro", "cinco", "seis"], correct: 2 },
-    { question: 'Como se diz "corpo" em Kambeba?', options: ["yara", "kama", "ita", "abiu"], correct: 1 },
-  ],
+const LEVEL_LABELS: Record<ActivityLevelCode, Level> = {
+  facil: "Fácil",
+  medio: "Médio",
+  avancado: "Avançado",
 };
+
+const LEVEL_STYLES: Record<ActivityLevelCode, { color: string; bg: string; fallbackDescription: string }> = {
+  facil: {
+    color: "#4A6741",
+    bg: "#eaf3e8",
+    fallbackDescription: "Reconhecimento de palavras e significados.",
+  },
+  medio: {
+    color: "#A64D25",
+    bg: "#fdf0e8",
+    fallbackDescription: "Associação e compreensão do vocabulário.",
+  },
+  avancado: {
+    color: "#6B4423",
+    bg: "#f2ebe3",
+    fallbackDescription: "Aplicação dos conhecimentos adquiridos.",
+  },
+};
+
+const ANSWER_CHOICES: AnswerChoice[] = ["A", "B", "C", "D"];
+
+type CorrectionResult = {
+  resultado_id: number;
+  tentativa_uuid: string;
+  acertos: number;
+  total_questoes: number;
+  data_realizacao: string;
+  ja_processada: boolean;
+};
+
+const isActivityLevelCode = (value: unknown): value is ActivityLevelCode =>
+  value === "facil" || value === "medio" || value === "avancado";
+
+const isAnswerChoice = (value: unknown): value is AnswerChoice =>
+  value === "A" || value === "B" || value === "C" || value === "D";
+
+const isValidAlternatives = (value: unknown): value is Record<AnswerChoice, string> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const alternatives = value as Record<string, unknown>;
+  return ANSWER_CHOICES.every((choice) => typeof alternatives[choice] === "string");
+};
+
+async function synchronizePendingAttempts(userId: string): Promise<void> {
+  if (!navigator.onLine) return;
+
+  let attempts: PendingAttempt[];
+  try {
+    attempts = await getPendingAttempts(userId);
+  } catch {
+    return;
+  }
+
+  for (const attempt of attempts) {
+    try {
+      const { data, error } = await supabase.rpc("corrigir_atividade", {
+        p_tentativa_uuid: attempt.tentativa_uuid,
+        p_atividade_id: attempt.atividade_id,
+        p_respostas: attempt.respostas,
+      });
+
+      if (error || !data || typeof data.acertos !== "number" || typeof data.total_questoes !== "number") {
+        continue;
+      }
+
+      await removePendingAttempt(attempt.tentativa_uuid);
+      window.dispatchEvent(
+        new CustomEvent<CorrectionResult>("tanu-tyura-attempt-synced", { detail: data as CorrectionResult }),
+      );
+    } catch {
+      // A tentativa permanece no IndexedDB para uma nova sincronização.
+    }
+  }
+}
 
 // ─── Icons (inline SVG) ───────────────────────────────────────────────────────
 
@@ -1332,194 +1400,378 @@ const ModuleContentScreen = ({
 
 // ─── Screen: Activities ───────────────────────────────────────────────────────
 
-const ActivitiesScreen = ({ onSelectLevel }: { onSelectLevel: (l: Level) => void }) => {
-  const levels: { level: Level; description: string; color: string; bg: string }[] = [
-    { level: "Fácil", description: "Comece sua jornada com vocabulário básico", color: "#4A6741", bg: "#eaf3e8" },
-    { level: "Médio", description: "Teste seus conhecimentos com palavras intermediárias", color: "#A64D25", bg: "#fdf0e8" },
-    { level: "Avançado", description: "Desafie seus conhecimentos com estruturas complexas", color: "#6B4423", bg: "#f2ebe3" },
-  ];
+const ActivitiesScreen = ({
+  onSelectActivity,
+}: {
+  onSelectActivity: (activity: LearningActivity) => void;
+}) => {
+  const [activities, setActivities] = useState<LearningActivity[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isUsingCache, setIsUsingCache] = useState(false);
+  const [error, setError] = useState("");
+  const [requestKey, setRequestKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadActivities = async () => {
+      setIsLoading(true);
+      setError("");
+      setIsUsingCache(false);
+
+      if (navigator.onLine) {
+        try {
+          const { data, error: queryError } = await supabase
+            .from("atividades")
+            .select("id, titulo, descricao, nivel")
+            .eq("ativo", true)
+            .order("id", { ascending: true });
+
+          if (queryError) throw queryError;
+
+          const validActivities = (data ?? []).filter(
+            (activity): activity is LearningActivity => isActivityLevelCode(activity.nivel),
+          );
+
+          if (!active) return;
+          setActivities(validActivities);
+          try {
+            await cacheActivities(validActivities);
+          } catch {
+            // A consulta online continua disponível mesmo se o navegador bloquear o cache.
+          }
+          setIsLoading(false);
+          return;
+        } catch {
+          // Tenta utilizar a última cópia local disponível.
+        }
+      }
+
+      try {
+        const cachedActivities = await getCachedActivities();
+        if (!active) return;
+        setActivities(cachedActivities);
+        setIsUsingCache(cachedActivities.length > 0);
+        if (cachedActivities.length === 0) {
+          setError("As atividades ainda não foram armazenadas neste dispositivo. Conecte-se à internet para carregá-las.");
+        }
+      } catch {
+        if (!active) return;
+        setActivities([]);
+        setError("Não foi possível carregar as atividades. Verifique sua conexão e tente novamente.");
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+
+    void loadActivities();
+    return () => {
+      active = false;
+    };
+  }, [requestKey]);
 
   return (
     <div className="page-container max-w-2xl">
       <h1 className="text-3xl font-bold mb-1" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>Atividades</h1>
       <p className="text-sm mb-8" style={{ color: "#6B4423" }}>Escolha seu nível e comece a praticar</p>
 
-      <div className="space-y-4">
-        {levels.map(({ level, description, color, bg }) => (
-          <button
-            key={level}
-            onClick={() => onSelectLevel(level)}
-            className="w-full flex items-center justify-between p-6 rounded-2xl text-left transition-all duration-200"
-            style={{ backgroundColor: bg, border: `2px solid ${color}22` }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateX(4px)"; (e.currentTarget as HTMLElement).style.borderColor = color; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = "none"; (e.currentTarget as HTMLElement).style.borderColor = `${color}22`; }}
-          >
-            <div>
-              <p className="font-bold text-lg mb-1" style={{ fontFamily: "Lora, serif", color }}>
-                {level}
-              </p>
-              <p className="text-sm" style={{ color: "#6B4423" }}>{description}</p>
-              <p className="text-xs mt-1" style={{ color }}>
-                {questions[level].length} questões
-              </p>
-            </div>
-            <div style={{ color }}>
-              <IconChevronRight />
-            </div>
+      {isUsingCache && (
+        <p className="mb-4 rounded-xl p-3 text-sm" style={{ backgroundColor: "#fdf0e8", color: "#6B4423" }} role="status">
+          Você está sem conexão. Exibindo atividades armazenadas neste dispositivo.
+        </p>
+      )}
+
+      {isLoading && <p role="status" className="text-sm mb-4" style={{ color: "#6B4423" }}>Carregando atividades…</p>}
+
+      {error && (
+        <div className="rounded-xl p-4 mb-4" style={{ backgroundColor: "#fee2e2", color: "#991b1b" }} role="alert">
+          <p className="text-sm">{error}</p>
+          <button type="button" onClick={() => setRequestKey((key) => key + 1)} className="mt-3 text-sm font-semibold underline">
+            Tentar novamente
           </button>
-        ))}
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {activities.map((activity) => {
+          const style = LEVEL_STYLES[activity.nivel];
+          return (
+            <button
+              key={activity.id}
+              type="button"
+              onClick={() => onSelectActivity(activity)}
+              className="w-full flex items-center justify-between p-6 rounded-2xl text-left transition-all duration-200"
+              style={{ backgroundColor: style.bg, border: `2px solid ${style.color}22` }}
+              onMouseEnter={(event) => {
+                (event.currentTarget as HTMLElement).style.transform = "translateX(4px)";
+                (event.currentTarget as HTMLElement).style.borderColor = style.color;
+              }}
+              onMouseLeave={(event) => {
+                (event.currentTarget as HTMLElement).style.transform = "none";
+                (event.currentTarget as HTMLElement).style.borderColor = `${style.color}22`;
+              }}
+            >
+              <div>
+                <p className="font-bold text-lg mb-1" style={{ fontFamily: "Lora, serif", color: style.color }}>
+                  {LEVEL_LABELS[activity.nivel]} — {activity.titulo}
+                </p>
+                <p className="text-sm" style={{ color: "#6B4423" }}>
+                  {activity.descricao || style.fallbackDescription}
+                </p>
+                <p className="text-xs mt-1" style={{ color: style.color }}>5 questões</p>
+              </div>
+              <div style={{ color: style.color }}>
+                <IconChevronRight />
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 };
 
-// ─── Screen: Question ─────────────────────────────────────────────────────────
-
 const QuestionScreen = ({
-  level,
+  activity,
+  userId,
   onFinish,
   onBack,
 }: {
-  level: Level;
-  onFinish: (correct: number, total: number) => void;
+  activity: LearningActivity;
+  userId: string;
+  onFinish: (attemptId: string) => void;
   onBack: () => void;
 }) => {
-  const qs = questions[level];
+  const [questions, setQuestions] = useState<ActivityQuestion[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isUsingCache, setIsUsingCache] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [qIndex, setQIndex] = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [confirmed, setConfirmed] = useState(false);
-  const [score, setScore] = useState(0);
+  const [selected, setSelected] = useState<AnswerChoice | null>(null);
+  const [answers, setAnswers] = useState<Record<number, AnswerChoice>>({});
+  const [isSaving, setIsSaving] = useState(false);
 
-  const current = qs[qIndex];
+  useEffect(() => {
+    let active = true;
 
-  const handleConfirm = () => {
-    if (selected === null) return;
-    setConfirmed(true);
-    if (selected === current.correct) setScore((s) => s + 1);
-  };
+    const loadQuestions = async () => {
+      setIsLoading(true);
+      setLoadError("");
+      setIsUsingCache(false);
 
-  const handleNext = () => {
-    if (qIndex + 1 >= qs.length) {
-      onFinish(score, qs.length);
-    } else {
-      setQIndex((i) => i + 1);
+      if (navigator.onLine) {
+        try {
+          const { data, error: queryError } = await supabase
+            .from("questoes")
+            .select("id, atividade_id, enunciado, alternativas, ordem")
+            .eq("atividade_id", activity.id)
+            .eq("ativo", true)
+            .order("ordem", { ascending: true });
+
+          if (queryError) throw queryError;
+
+          const validQuestions: ActivityQuestion[] = (data ?? [])
+            .filter((question) => isValidAlternatives(question.alternativas))
+            .map((question) => ({
+              id: question.id,
+              atividade_id: question.atividade_id,
+              enunciado: question.enunciado,
+              alternativas: question.alternativas,
+              ordem: question.ordem,
+            }));
+
+          if (validQuestions.length !== 5) {
+            throw new Error("A atividade não possui exatamente cinco questões válidas.");
+          }
+
+          if (!active) return;
+          setQuestions(validQuestions);
+          try {
+            await cacheQuestionsForActivity(activity.id, validQuestions);
+          } catch {
+            // Mantém as questões em memória se o navegador não permitir o cache local.
+          }
+          setIsLoading(false);
+          return;
+        } catch {
+          // Tenta a cópia local caso a consulta online falhe.
+        }
+      }
+
+      try {
+        const cachedQuestions = await getCachedQuestions(activity.id);
+        if (!active) return;
+        if (cachedQuestions.length !== 5) {
+          setQuestions([]);
+          setLoadError("As questões desta atividade ainda não foram armazenadas neste dispositivo. Conecte-se à internet para carregá-las primeiro.");
+        } else {
+          setQuestions(cachedQuestions);
+          setIsUsingCache(true);
+        }
+      } catch {
+        if (!active) return;
+        setQuestions([]);
+        setLoadError("Não foi possível carregar as questões. Verifique sua conexão e tente novamente.");
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+
+    void loadQuestions();
+    return () => {
+      active = false;
+    };
+  }, [activity.id]);
+
+  const current = questions[qIndex];
+
+  const handleNext = async () => {
+    if (!current || selected === null || isSaving) return;
+
+    const updatedAnswers = { ...answers, [current.id]: selected };
+    setAnswers(updatedAnswers);
+
+    if (qIndex + 1 < questions.length) {
+      setQIndex((index) => index + 1);
       setSelected(null);
-      setConfirmed(false);
+      return;
+    }
+
+    const attemptId = crypto.randomUUID();
+    const attempt: PendingAttempt = {
+      tentativa_uuid: attemptId,
+      usuario_id: userId,
+      atividade_id: activity.id,
+      respostas: questions.map((question) => ({
+        questao_id: question.id,
+        resposta: updatedAnswers[question.id],
+      })),
+      criada_em: new Date().toISOString(),
+    };
+
+    if (attempt.respostas.some((answer) => !answer.resposta)) {
+      setLoadError("Não foi possível registrar todas as respostas. Revise a atividade e tente novamente.");
+      return;
+    }
+
+    setIsSaving(true);
+    setLoadError("");
+    try {
+      await savePendingAttempt(attempt);
+      onFinish(attemptId);
+    } catch {
+      setLoadError("Não foi possível salvar sua tentativa neste dispositivo. Verifique o espaço disponível no navegador e tente novamente.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const isCorrect = confirmed && selected === current.correct;
+  if (isLoading) {
+    return (
+      <div className="page-container max-w-2xl">
+        <p role="status" className="text-sm" style={{ color: "#6B4423" }}>Carregando questões…</p>
+      </div>
+    );
+  }
+
+  if (loadError && questions.length === 0) {
+    return (
+      <div className="page-container max-w-2xl">
+        <button type="button" onClick={onBack} className="flex items-center gap-2 text-sm font-medium mb-6" style={{ color: "#6B4423" }}>
+          <IconChevronLeft /> Atividades
+        </button>
+        <div className="rounded-xl p-4" style={{ backgroundColor: "#fee2e2", color: "#991b1b" }} role="alert">
+          {loadError}
+        </div>
+      </div>
+    );
+  }
+
+  if (!current) return null;
+
+  const levelLabel = LEVEL_LABELS[activity.nivel];
+
   return (
     <div className="page-container max-w-2xl">
-      {/* Header */}
       <div className="grid grid-cols-[1fr_auto] items-center gap-3 mb-6 sm:grid-cols-[1fr_auto_1fr]">
-        <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium" style={{ color: "#6B4423" }}>
+        <button type="button" onClick={onBack} className="flex items-center gap-2 text-sm font-medium" style={{ color: "#6B4423" }}>
           <IconChevronLeft /> Atividades
         </button>
         <h1 className="text-sm font-medium" style={{ color: "#6B4423" }}>
-          Trilha {level}
+          Trilha {levelLabel}
         </h1>
         <span className="col-span-2 text-right text-sm sm:col-span-1" style={{ color: "#6B4423" }}>
-          {qIndex + 1} / {qs.length}
+          {qIndex + 1} / {questions.length}
         </span>
       </div>
 
-      {/* Progress */}
-      <div className="h-2 rounded-full mb-8 overflow-hidden" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Progresso da atividade" aria-valuemin={1} aria-valuemax={qs.length} aria-valuenow={qIndex + 1}>
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${((qIndex + 1) / qs.length) * 100}%`, backgroundColor: "#A64D25" }}
-        />
+      {isUsingCache && (
+        <p className="rounded-xl p-3 mb-5 text-sm" style={{ backgroundColor: "#fdf0e8", color: "#6B4423" }} role="status">
+          Modo offline: as questões foram carregadas do armazenamento deste dispositivo. A correção será realizada quando a conexão retornar.
+        </p>
+      )}
+
+      <div className="h-2 rounded-full mb-8 overflow-hidden" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Questões respondidas" aria-valuemin={0} aria-valuemax={questions.length} aria-valuenow={qIndex}>
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(qIndex / questions.length) * 100}%`, backgroundColor: "#A64D25" }} />
       </div>
 
-      {/* Question */}
-      <div
-        className="rounded-2xl p-5 sm:p-8 mb-6"
-        style={{ backgroundColor: "#E8D5C4", border: "1.5px solid #D4A574" }}
-        aria-live="polite"
-      >
-        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#6B4423" }}>Questão</p>
+      <div className="rounded-2xl p-5 sm:p-8 mb-6" style={{ backgroundColor: "#E8D5C4", border: "1.5px solid #D4A574" }} aria-live="polite">
+        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#6B4423" }}>Questão {qIndex + 1}</p>
         <h2 className="text-xl font-bold" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>
-          {current.question}
+          {current.enunciado}
         </h2>
       </div>
 
-      {/* Options */}
       <fieldset className="space-y-3 mb-6">
         <legend className="sr-only">Escolha uma alternativa</legend>
-        {current.options.map((opt, i) => {
-          let bg = "#E8D5C4";
-          let border = "#D4A574";
-          let color = "#3D2B1A";
-          if (confirmed && i === current.correct) { bg = "#dcfce7"; border = "#16a34a"; color = "#15803d"; }
-          else if (confirmed && i === selected && i !== current.correct) { bg = "#fee2e2"; border = "#dc2626"; color = "#b91c1c"; }
-          else if (!confirmed && i === selected) { border = "#A64D25"; bg = "#F5E6D3"; }
-
+        {ANSWER_CHOICES.map((choice) => {
+          const isSelected = selected === choice;
           return (
             <label
-              key={i}
+              key={choice}
               className="answer-option flex cursor-pointer items-center gap-4 rounded-xl p-4 transition-all"
-              style={{ backgroundColor: bg, border: `2px solid ${border}`, color }}
+              style={{
+                backgroundColor: isSelected ? "#F5E6D3" : "#E8D5C4",
+                border: `2px solid ${isSelected ? "#A64D25" : "#D4A574"}`,
+                color: "#3D2B1A",
+              }}
             >
               <input
                 type="radio"
-                name="answer"
-                value={i}
-                checked={selected === i}
-                onChange={() => { if (!confirmed) setSelected(i); }}
-                disabled={confirmed}
+                name={`answer-${current.id}`}
+                value={choice}
+                checked={isSelected}
+                onChange={() => setSelected(choice)}
+                disabled={isSaving}
                 className="sr-only"
               />
-              <div
-                className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 transition-all"
-                style={{
-                  backgroundColor: !confirmed && i === selected ? "#A64D25" : confirmed && i === current.correct ? "#16a34a" : confirmed && i === selected ? "#dc2626" : "#D4A574",
-                  color: (!confirmed && i === selected) || (confirmed && (i === current.correct || i === selected)) ? "white" : "#6B4423",
-                }}
+              <span
+                className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+                style={{ backgroundColor: isSelected ? "#A64D25" : "#D4A574", color: isSelected ? "white" : "#6B4423" }}
               >
-                {confirmed && i === current.correct ? <IconCheck /> : confirmed && i === selected && i !== current.correct ? <IconX /> : String.fromCharCode(65 + i)}
-              </div>
-              <span className="font-medium">{opt}</span>
+                {choice}
+              </span>
+              <span className="font-medium">{current.alternativas[choice]}</span>
             </label>
           );
         })}
       </fieldset>
 
-      {/* Feedback */}
-      {confirmed && (
-        <div
-          className="p-3 rounded-xl text-sm font-medium mb-4"
-          style={{
-            backgroundColor: isCorrect ? "#dcfce7" : "#fee2e2",
-            color: isCorrect ? "#15803d" : "#b91c1c",
-          }}
-          role="alert"
-          aria-live="assertive"
-        >
-          {isCorrect ? "✓ Correto! Muito bem!" : `✗ Resposta correta: ${current.options[current.correct]}`}
-        </div>
+      {loadError && (
+        <p className="rounded-xl p-3 mb-4 text-sm" style={{ backgroundColor: "#fee2e2", color: "#991b1b" }} role="alert">
+          {loadError}
+        </p>
       )}
 
-      <div className="flex gap-3">
-        {!confirmed ? (
-          <button
-            onClick={handleConfirm}
-            disabled={selected === null}
-            className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
-            style={{ backgroundColor: selected === null ? "#c47040" : "#A64D25", cursor: selected === null ? "not-allowed" : "pointer" }}
-          >
-            Confirmar
-          </button>
-        ) : (
-          <button
-            onClick={handleNext}
-            className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
-            style={{ backgroundColor: "#A64D25" }}
-          >
-            {qIndex + 1 >= qs.length ? "Ver resultado" : "Próxima questão →"}
-          </button>
-        )}
-      </div>
+      <button
+        type="button"
+        onClick={() => void handleNext()}
+        disabled={selected === null || isSaving}
+        className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
+        style={{ backgroundColor: selected === null || isSaving ? "#c47040" : "#A64D25", cursor: selected === null || isSaving ? "not-allowed" : "pointer" }}
+      >
+        {isSaving ? "Salvando tentativa…" : qIndex + 1 === questions.length ? "Finalizar atividade" : "Próxima questão →"}
+      </button>
     </div>
   );
 };
@@ -1530,18 +1782,28 @@ const ResultScreen = ({
   correct,
   total,
   level,
+  pending,
   onRetry,
   onBack,
+  onSyncNow,
 }: {
   correct: number;
   total: number;
   level: Level;
+  pending: boolean;
   onRetry: () => void;
   onBack: () => void;
+  onSyncNow: () => void;
 }) => {
-  const pct = Math.round((correct / total) * 100);
-  const msg = pct >= 80 ? "Excelente! Parabéns pelo desempenho!" : pct >= 60 ? "Bom trabalho! Continue praticando." : "Continue tentando, você está evoluindo!";
-  const msgColor = pct >= 80 ? "#15803d" : pct >= 60 ? "#A64D25" : "#6B4423";
+  const pct = pending ? null : Math.round((correct / total) * 100);
+  const msg = pending
+    ? "Sua tentativa foi salva neste dispositivo. A correção e a pontuação estarão disponíveis quando a conexão retornar."
+    : pct !== null && pct >= 80
+      ? "Excelente! Parabéns pelo desempenho!"
+      : pct !== null && pct >= 60
+        ? "Bom trabalho! Continue praticando."
+        : "Continue tentando, você está evoluindo!";
+  const msgColor = pending ? "#6B4423" : pct !== null && pct >= 80 ? "#15803d" : pct !== null && pct >= 60 ? "#A64D25" : "#6B4423";
 
   return (
     <div className="page-container max-w-lg text-center">
@@ -1551,39 +1813,48 @@ const ResultScreen = ({
         </div>
 
         <h1 className="text-3xl font-bold mb-1" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>
-          Resultado
+          {pending ? "Atividade enviada para correção" : "Resultado"}
         </h1>
         <p className="text-sm mb-8" style={{ color: "#6B4423" }}>Trilha {level}</p>
 
-        <div
-          className="text-6xl font-bold mb-2"
-          style={{ fontFamily: "Lora, serif", color: "#6B4423" }}
-          aria-label={`${correct} de ${total} acertos`}
-        >
-          {correct}<span className="text-3xl" style={{ color: "#6B4423" }}> / {total}</span>
-        </div>
-        <p className="text-lg font-semibold mb-6" style={{ color: "#A64D25" }}>{pct}% de acertos</p>
-
-        {/* Progress bar */}
-        <div className="h-3 rounded-full overflow-hidden mb-2" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Percentual de acertos" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-          <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#4A6741" : pct >= 60 ? "#A64D25" : "#8B6F47" }} />
-        </div>
-
-        <div className="flex flex-col justify-center gap-3 mb-6 text-sm sm:flex-row sm:gap-6">
-          <div className="flex items-center gap-2" style={{ color: "#15803d" }}>
-            <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center"><IconCheck /></div>
-            {correct} acertos
+        {pending ? (
+          <div className="rounded-xl p-4 mb-6 text-sm" style={{ backgroundColor: "#fdf0e8", color: "#6B4423" }} role="status" aria-live="polite">
+            {msg}
+            {navigator.onLine && (
+              <button type="button" onClick={onSyncNow} className="block w-full mt-4 font-semibold underline">
+                Tentar sincronizar agora
+              </button>
+            )}
           </div>
-          <div className="flex items-center gap-2" style={{ color: "#dc2626" }}>
-            <div className="w-5 h-5 rounded-full bg-red-100 flex items-center justify-center"><IconX /></div>
-            {total - correct} erros
-          </div>
-        </div>
+        ) : (
+          <>
+            <div className="text-6xl font-bold mb-2" style={{ fontFamily: "Lora, serif", color: "#6B4423" }} aria-label={`${correct} de ${total} acertos`}>
+              {correct}<span className="text-3xl" style={{ color: "#6B4423" }}> / {total}</span>
+            </div>
+            <p className="text-lg font-semibold mb-6" style={{ color: "#A64D25" }}>{pct}% de acertos</p>
 
-        <p className="text-sm font-medium mb-8" style={{ color: msgColor }}>{msg}</p>
+            <div className="h-3 rounded-full overflow-hidden mb-2" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Percentual de acertos" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? 0}>
+              <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${pct}%`, backgroundColor: pct !== null && pct >= 80 ? "#4A6741" : pct !== null && pct >= 60 ? "#A64D25" : "#8B6F47" }} />
+            </div>
+
+            <div className="flex flex-col justify-center gap-3 mb-6 text-sm sm:flex-row sm:gap-6">
+              <div className="flex items-center gap-2" style={{ color: "#15803d" }}>
+                <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center"><IconCheck /></div>
+                {correct} acertos
+              </div>
+              <div className="flex items-center gap-2" style={{ color: "#dc2626" }}>
+                <div className="w-5 h-5 rounded-full bg-red-100 flex items-center justify-center"><IconX /></div>
+                {total - correct} erros
+              </div>
+            </div>
+          </>
+        )}
+
+        {!pending && <p className="text-sm font-medium mb-8" style={{ color: msgColor }}>{msg}</p>}
 
         <div className="space-y-3">
           <button
+            type="button"
             onClick={onRetry}
             className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
             style={{ backgroundColor: "#A64D25" }}
@@ -1591,6 +1862,7 @@ const ResultScreen = ({
             Refazer atividade
           </button>
           <button
+            type="button"
             onClick={onBack}
             className="w-full py-3 rounded-xl font-semibold text-sm transition-all"
             style={{ backgroundColor: "transparent", border: "1.5px solid #D4A574", color: "#6B4423" }}
@@ -1617,9 +1889,11 @@ const AuthLoadingScreen = () => (
 export default function App() {
   const [screen, setScreen] = useState<Screen>("login");
   const [selectedModule, setSelectedModule] = useState<LearningModule | null>(null);
-  const [selectedLevel, setSelectedLevel] = useState<Level>("Fácil");
+  const [selectedActivity, setSelectedActivity] = useState<LearningActivity | null>(null);
   const [activityKey, setActivityKey] = useState(0);
   const [result, setResult] = useState({ correct: 0, total: 0 });
+  const [resultPending, setResultPending] = useState(false);
+  const currentAttemptUuid = useRef<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [loginNotice, setLoginNotice] = useState("");
@@ -1650,6 +1924,32 @@ export default function App() {
       active = false;
       authListener.subscription.unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user.id) return;
+
+    const syncWhenOnline = () => {
+      void synchronizePendingAttempts(session.user.id);
+    };
+
+    void synchronizePendingAttempts(session.user.id);
+    window.addEventListener("online", syncWhenOnline);
+    return () => window.removeEventListener("online", syncWhenOnline);
+  }, [session?.user.id]);
+
+  useEffect(() => {
+    const handleAttemptSynced = (event: Event) => {
+      const detail = (event as CustomEvent<CorrectionResult>).detail;
+      if (!detail || detail.tentativa_uuid !== currentAttemptUuid.current) return;
+
+      setResult({ correct: detail.acertos, total: detail.total_questoes });
+      setResultPending(false);
+      setAppNotice("Atividade corrigida e resultado sincronizado com sucesso.");
+    };
+
+    window.addEventListener("tanu-tyura-attempt-synced", handleAttemptSynced);
+    return () => window.removeEventListener("tanu-tyura-attempt-synced", handleAttemptSynced);
   }, []);
 
   const navigateTo = (s: Screen) => {
@@ -1729,20 +2029,34 @@ export default function App() {
     setScreen("module-content");
   };
 
-  const handleSelectLevel = (level: Level) => {
-    setSelectedLevel(level);
-    setActivityKey((k) => k + 1);
+  const handleSelectActivity = (activity: LearningActivity) => {
+    setSelectedActivity(activity);
+    setActivityKey((key) => key + 1);
+    setResultPending(false);
+    currentAttemptUuid.current = null;
     setScreen("question");
   };
 
-  const handleFinish = (correct: number, total: number) => {
-    setResult({ correct, total });
+  const handleFinish = (attemptId: string) => {
+    currentAttemptUuid.current = attemptId;
+    setResult({ correct: 0, total: 0 });
+    setResultPending(true);
     setScreen("result");
+
+    if (session?.user.id && navigator.onLine) {
+      void synchronizePendingAttempts(session.user.id);
+    }
   };
 
   const handleRetry = () => {
-    setActivityKey((k) => k + 1);
+    setActivityKey((key) => key + 1);
+    setResultPending(false);
+    currentAttemptUuid.current = null;
     setScreen("question");
+  };
+
+  const handleSyncNow = () => {
+    if (session?.user.id) void synchronizePendingAttempts(session.user.id);
   };
 
   if (!authReady) {
@@ -1765,22 +2079,25 @@ export default function App() {
       {screen === "module-content" && selectedModule && (
         <ModuleContentScreen module={selectedModule} onBack={() => setScreen("modules")} />
       )}
-      {screen === "activities" && <ActivitiesScreen onSelectLevel={handleSelectLevel} />}
-      {screen === "question" && (
+      {screen === "activities" && <ActivitiesScreen onSelectActivity={handleSelectActivity} />}
+      {screen === "question" && selectedActivity && session && (
         <QuestionScreen
           key={activityKey}
-          level={selectedLevel}
+          activity={selectedActivity}
+          userId={session.user.id}
           onFinish={handleFinish}
           onBack={() => setScreen("activities")}
         />
       )}
-      {screen === "result" && (
+      {screen === "result" && selectedActivity && (
         <ResultScreen
           correct={result.correct}
           total={result.total}
-          level={selectedLevel}
+          level={LEVEL_LABELS[selectedActivity.nivel]}
+          pending={resultPending}
           onRetry={handleRetry}
           onBack={() => setScreen("activities")}
+          onSyncNow={handleSyncNow}
         />
       )}
     </AppLayout>
