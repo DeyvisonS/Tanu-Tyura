@@ -1513,7 +1513,7 @@ const ActivitiesScreen = ({
             >
               <div>
                 <p className="font-bold text-lg mb-1" style={{ fontFamily: "Lora, serif", color: style.color }}>
-                  {LEVEL_LABELS[activity.nivel]} — {activity.titulo}
+                  {activity.titulo}
                 </p>
                 <p className="text-sm" style={{ color: "#6B4423" }}>
                   {activity.descricao || style.fallbackDescription}
