@@ -208,7 +208,9 @@ Até o momento, foram realizadas as seguintes etapas:
 * Ajuste da pesquisa do dicionário para encontrar correspondências no início do termo em Kambeba ou da tradução em português.
 * Geração da migração SQL e versionamento da estrutura e dos dados iniciais no GitHub.
 
-Permanecem como etapas de desenvolvimento a implementação das atividades e questões, a validação segura das respostas, a gravação dos resultados, a incorporação dos áudios e o funcionamento offline com armazenamento local e sincronização.
+Na branch `feature/atividades-supabase-offline`, foi iniciada a integração das atividades com o Supabase. A implementação substitui as questões estáticas do código por consultas às atividades e questões cadastradas, utiliza IndexedDB para manter atividades, questões e tentativas pendentes, e acrescenta um Service Worker para armazenar o shell e os recursos estáticos da aplicação. A correção das respostas continua centralizada na função `public.corrigir_atividade()`, sem copiar os gabaritos para o armazenamento local. Essa implementação está em branch separada e ainda depende de revisão e testes integrados antes de ser incorporada à branch principal.
+
+Permanecem como etapas de desenvolvimento os testes integrados das atividades, a validação da sincronização em condições reais de conexão, a ampliação do armazenamento offline para outros conteúdos da plataforma, a incorporação dos áudios e os testes finais de usabilidade e acessibilidade.
 
 ## 9. Considerações finais
 
