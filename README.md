@@ -13,8 +13,8 @@ A proposta busca contribuir para a valorização e a aprendizagem da língua, re
 * Cadastro e autenticação de usuários.
 * Módulos de aprendizagem organizados por categorias.
 * Dicionário Kambeba–Português com pesquisa de palavras.
-* Estrutura de atividades de múltipla escolha.
-* Estrutura para armazenamento dos resultados das atividades.
+* Atividades de múltipla escolha em três níveis de dificuldade.
+* Cálculo e armazenamento dos resultados das atividades.
 
 ## Módulos de aprendizagem
 
@@ -26,7 +26,7 @@ O conteúdo está organizado em cinco categorias:
 4. Família e pessoas.
 5. Palavras do cotidiano.
 
-O banco de dados contém 43 palavras cadastradas, com seus respectivos termos em Kambeba e traduções para o português. Os áudios ainda serão incorporados após a coleta e validação dos materiais com a professora Kambeba.
+O banco de dados contém 43 palavras cadastradas, com seus respectivos termos em Kambeba e traduções para o português. O conteúdo permanece conforme a lista validada pela professora Kambeba. Os áudios ainda serão incorporados após a coleta e validação dos materiais.
 
 ## Tecnologias utilizadas
 
@@ -39,7 +39,7 @@ O banco de dados contém 43 palavras cadastradas, com seus respectivos termos em
 
 ## Banco de dados
 
-O projeto possui tabelas para usuários, módulos, palavras, atividades, questões e resultados, além de uma tabela privada destinada ao armazenamento das respostas corretas das questões.
+O projeto possui tabelas para usuários, módulos, palavras, atividades, questões e resultados, além da tabela privada `private.gabaritos`, destinada ao armazenamento das respostas corretas. Foram cadastradas 15 questões, distribuídas igualmente entre os três níveis de dificuldade.
 
 Foram configurados relacionamentos entre as entidades, políticas de segurança por linha (RLS) e uma rotina para criação automática do perfil do usuário após o cadastro.
 
@@ -51,10 +51,15 @@ O desenvolvimento considera as heurísticas de usabilidade de Nielsen, as diretr
 
 A validação sistemática da acessibilidade e da usabilidade deverá ser documentada a partir dos testes realizados.
 
+## Funcionamento offline
+
+A estratégia de funcionamento offline utiliza o Service Worker para manter o aplicativo e seus recursos estáticos em cache e o IndexedDB para armazenar atividades, questões e tentativas pendentes. O gabarito permanece no banco de dados privado. Quando a conexão retorna, as respostas são enviadas ao servidor para correção e registro do resultado.
+
+A integração das atividades e o fluxo de armazenamento offline estão em desenvolvimento na branch `feature/atividades-supabase-offline` e ainda precisam passar por revisão e testes antes da incorporação à branch principal.
+
 ## Etapas em desenvolvimento
 
-* Implementação das atividades, questões e correção das respostas.
-* Integração e armazenamento dos resultados.
+* Testes integrados das atividades, correção e armazenamento dos resultados.
 * Incorporação dos áudios aos módulos de aprendizagem.
 * Implementação e testes do funcionamento offline.
 * Avaliação de usabilidade e acessibilidade.
