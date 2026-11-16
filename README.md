@@ -21,6 +21,29 @@ A proposta busca contribuir para a valorização e a aprendizagem da língua, re
 - Armazenamento local dos conteúdos públicos e de tentativas realizadas sem conexão.
 - Sincronização de tentativas pendentes quando a conexão e uma sessão válida estiverem disponíveis.
 
+## Capturas de tela
+
+As telas abaixo apresentam as principais áreas e recursos da plataforma.
+
+<table>
+  <tr>
+    <td align="center"><strong>1. Página inicial</strong><br><img src="docs/images/01-pagina-inicial.webp" alt="Página inicial do Tanu-Tyura" width="220"></td>
+    <td align="center"><strong>2. Módulos de estudo</strong><br><img src="docs/images/02-modulos.webp" alt="Categorias dos módulos de estudo" width="220"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>3. Conteúdo de um módulo</strong><br><img src="docs/images/03-conteudo-modulo.webp" alt="Apresentação de uma palavra em um módulo de aprendizagem" width="220"></td>
+    <td align="center"><strong>4. Dicionário</strong><br><img src="docs/images/04-dicionario.webp" alt="Dicionário Kambeba–Português" width="220"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>5. Atividades</strong><br><img src="docs/images/05-atividades.webp" alt="Seleção dos níveis de atividade" width="220"></td>
+    <td align="center"><strong>6. Questão</strong><br><img src="docs/images/06-questao.webp" alt="Questão de múltipla escolha de uma atividade" width="220"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>7. Resultado</strong><br><img src="docs/images/07-resultado.webp" alt="Tela de resultado da atividade" width="220"></td>
+    <td></td>
+  </tr>
+</table>
+
 ## Conteúdo de aprendizagem
 
 O conteúdo está organizado em cinco categorias:
