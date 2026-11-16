@@ -1912,7 +1912,6 @@ const QuestionScreen = ({
         return;
       }
 
-      console.info("[Tanu-Tyura] Enviando atividade para correção", attempt);
       const { result, error } = await correctStoredAttempt(attempt);
       if (error) {
         logSupabaseError("Falha na RPC corrigir_atividade", error);
