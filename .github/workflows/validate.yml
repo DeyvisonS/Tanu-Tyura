@@ -3,10 +3,12 @@ name: Validar aplicação
 on:
   push:
     branches:
+      - main
       - "feature/atividades-supabase-offline"
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,7 +20,7 @@ jobs:
       - name: Configurar pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.0.0
+          version: 10.34.3
 
       - name: Configurar Node.js
         uses: actions/setup-node@v4
