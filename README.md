@@ -10,13 +10,15 @@ A proposta busca contribuir para a valorização e a aprendizagem da língua, re
 
 ## Funcionalidades
 
-* Cadastro e autenticação de usuários.
-* Módulos de aprendizagem organizados por categorias.
-* Dicionário Kambeba–Português com pesquisa de palavras.
-* Estrutura de atividades de múltipla escolha.
-* Estrutura para armazenamento dos resultados das atividades.
+- Cadastro e autenticação de usuários.
+- Página inicial e navegação entre as áreas de aprendizagem.
+- Cinco módulos organizados por categorias.
+- Dicionário Kambeba–Português com pesquisa por prefixo.
+- Atividades de múltipla escolha em três níveis: Fácil, Médio e Avançado.
+- Exibição da pontuação retornada pelo servidor após a correção.
+- Armazenamento local de conteúdos públicos e de tentativas realizadas offline.
 
-## Módulos de aprendizagem
+## Conteúdo de aprendizagem
 
 O conteúdo está organizado em cinco categorias:
 
@@ -26,43 +28,72 @@ O conteúdo está organizado em cinco categorias:
 4. Família e pessoas.
 5. Palavras do cotidiano.
 
-O banco de dados contém 43 palavras cadastradas, com seus respectivos termos em Kambeba e traduções para o português. Os áudios ainda serão incorporados após a coleta e validação dos materiais com a professora Kambeba.
+A base atual contém **43 palavras**, conforme a lista validada pela professora Kambeba.
+
+As atividades possuem três níveis de dificuldade, com **cinco questões por nível**, totalizando 15 questões. As alternativas são identificadas por A, B, C e D.
 
 ## Tecnologias utilizadas
 
-* **Figma Make:** prototipação e desenvolvimento assistido da interface web.
-* **Supabase:** serviços de autenticação e back-end.
-* **PostgreSQL:** gerenciamento do banco de dados relacional.
-* **SQL:** criação de tabelas, relacionamentos, consultas e políticas de acesso.
-* **PlantUML:** elaboração dos diagramas UML.
-* **GitHub:** versionamento e armazenamento do código-fonte.
+- **Figma Make:** desenvolvimento assistido e manutenção da interface web.
+- **React e TypeScript:** implementação da aplicação.
+- **Vite:** ferramenta de desenvolvimento e build.
+- **Supabase Auth:** autenticação de usuários.
+- **Supabase / PostgreSQL:** banco de dados e serviços de back-end.
+- **IndexedDB:** armazenamento local de conteúdos e tentativas offline.
+- **Service Worker e Cache Storage:** cache do shell e dos recursos estáticos.
+- **GitHub:** versionamento e armazenamento do código-fonte.
 
-## Banco de dados
+## Banco de dados e correção das atividades
 
-O projeto possui tabelas para usuários, módulos, palavras, atividades, questões e resultados, além de uma tabela privada destinada ao armazenamento das respostas corretas das questões.
+O banco de dados possui seis tabelas no esquema `public`: `usuarios`, `modulos`, `palavras`, `atividades`, `questoes` e `resultados`. As respostas corretas ficam separadas na tabela privada `private.gabaritos`.
 
-Foram configurados relacionamentos entre as entidades, políticas de segurança por linha (RLS) e uma rotina para criação automática do perfil do usuário após o cadastro.
+A interface consulta as atividades e questões cadastradas no Supabase. A correção é realizada exclusivamente pela função `public.corrigir_atividade()`, que consulta os gabaritos no esquema privado e registra o resultado associado ao usuário autenticado.
 
-Os cinco módulos e as 43 palavras iniciais foram cadastrados no banco. A integração do dicionário foi implementada, incluindo pesquisa pelo início do termo em Kambeba ou da tradução em português.
+O identificador UUID da tentativa é reutilizado durante os reenvios para permitir idempotência e evitar registros duplicados. O gabarito não é enviado ao navegador nem armazenado no IndexedDB.
 
-## Acessibilidade e usabilidade
+## Funcionamento offline
 
-O desenvolvimento considera as heurísticas de usabilidade de Nielsen, as diretrizes WCAG e o modelo e-MAG como referências para orientar a interface e sua avaliação.
+O funcionamento offline utiliza três mecanismos complementares:
 
-A validação sistemática da acessibilidade e da usabilidade deverá ser documentada a partir dos testes realizados.
+- **Pré-carregamento global:** durante a inicialização online, a aplicação consulta os módulos, as palavras, as atividades e as questões e prepara automaticamente o conteúdo local. O estudante não precisa abrir individualmente cada seção para que os dados sejam armazenados.
+- **IndexedDB:** o banco local `tanu-tyura-offline` (versão 2) mantém os stores `modules`, `words`, `activities`, `questions` e `attempts`. O conjunto público atual esperado é de cinco módulos, 43 palavras, três atividades e 15 questões.
+- **Service Worker:** mantém o shell e os recursos permitidos em cache para permitir a reabertura da aplicação após a preparação inicial.
 
-## Etapas em desenvolvimento
+O pré-carregamento valida o conjunto recebido antes de atualizar os dados locais. Se as consultas falharem ou retornarem dados incompletos, o cache anterior é preservado. As tentativas pendentes também são preservadas durante as atualizações de conteúdo.
 
-* Implementação das atividades, questões e correção das respostas.
-* Integração e armazenamento dos resultados.
-* Incorporação dos áudios aos módulos de aprendizagem.
-* Implementação e testes do funcionamento offline.
-* Avaliação de usabilidade e acessibilidade.
-* Aprimoramento da responsividade da plataforma.
+Quando uma atividade é finalizada sem conexão, as respostas são gravadas localmente com um UUID e permanecem pendentes. Ao retornar a conexão, a aplicação verifica a sessão e envia as respostas à função `public.corrigir_atividade()`. A pontuação definitiva só é apresentada após a confirmação do servidor.
+
+O Service Worker não armazena requisições ao Supabase, credenciais, respostas autenticadas ou tentativas. O cache de recursos externos é restrito aos recursos de fontes autorizados no código.
+
+### Limitações atuais do modo offline
+
+- O primeiro carregamento e a preparação dos conteúdos exigem conexão com a internet.
+- Login e cadastro continuam dependendo de conexão.
+- A correção definitiva e a sincronização das tentativas exigem conexão.
+- Áudios hospedados externamente ainda não estão garantidos para reprodução offline.
+- A instalação como PWA e a autorização local para acesso offline ainda são etapas futuras de distribuição.
 
 ## Segurança
 
-O projeto utiliza o Supabase Auth para autenticação e políticas RLS para controlar o acesso aos dados. Chaves secretas e credenciais não devem ser armazenadas no repositório nem expostas no código executado no navegador.
+O Supabase Auth gerencia as credenciais dos usuários. As políticas RLS controlam o acesso aos dados. A função `public.corrigir_atividade()` executa a correção no servidor, consulta `private.gabaritos` e registra o resultado sem expor as respostas corretas ao front-end.
+
+Não devem ser armazenadas no repositório chaves secretas, senhas ou credenciais privadas. A chave pública necessária ao cliente Supabase não substitui as políticas de segurança do banco.
+
+## Acessibilidade e usabilidade
+
+O desenvolvimento considera as heurísticas de usabilidade de Nielsen, as diretrizes WCAG e o modelo e-MAG como referências para orientar a interface e sua avaliação. A avaliação sistemática deve ser registrada a partir dos testes realizados.
+
+## Validações realizadas e próximas etapas
+
+Durante o desenvolvimento, foram relatadas as seguintes verificações:
+
+- Compilação TypeScript (`pnpm exec tsc --noEmit`) e build (`pnpm build`) concluídos com sucesso no Figma Make.
+- Correção das atividades testada no preview: Fácil 1/5, Médio 1/5 e Avançado 4/5, de acordo com os casos de teste utilizados.
+- Pré-carregamento testado em Chromium com os dados reais: cinco módulos, 43 palavras, três atividades e 15 questões.
+- Persistência dos conteúdos e das tentativas verificada em navegações separadas usando IndexedDB.
+- Registro do Service Worker observado no preview do Figma Make.
+
+A validação ponta a ponta da versão exportada e sincronizada com o GitHub deve continuar, especialmente a reabertura offline após uma atualização completa e a sincronização autenticada das tentativas.
 
 ## Contexto acadêmico
 

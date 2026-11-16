@@ -92,7 +92,7 @@ Os níveis aceitos pelo banco são `facil`, `medio` e `avancado`, correspondente
 
 As atividades são gerais e não possuem vínculo direto com os módulos de aprendizagem.
 
-A tabela foi criada, mas a implementação completa das atividades na interface ainda está pendente.
+A tabela possui três atividades ativas, correspondentes aos níveis Fácil (`facil`), Médio (`medio`) e Avançado (`avancado`). A interface carrega as atividades e suas questões a partir do Supabase e permite responder às cinco questões de cada nível.
 
 ### 3.5. questoes
 
@@ -109,7 +109,7 @@ Principais campos:
 
 As alternativas são identificadas pelas letras A, B, C e D. Uma restrição verifica a presença dessas identificações no objeto JSONB, enquanto outra impede a repetição da mesma ordem dentro de uma atividade.
 
-Cada questão deve estar associada a uma atividade existente. A estrutura permite organizar várias questões em uma atividade, embora a existência de questões cadastradas para cada atividade ainda dependa da inclusão dos conteúdos.
+Cada questão está associada a uma atividade existente. Foram cadastradas 15 questões iniciais, distribuídas em três atividades, com cinco questões por nível: Fácil, Médio e Avançado. As alternativas são armazenadas no próprio registro da questão, enquanto a alternativa correta permanece separada na tabela `private.gabaritos`.
 
 As respostas corretas são armazenadas separadamente, na tabela `private.gabaritos`.
 
@@ -125,10 +125,11 @@ Principais campos:
 * `acertos`: quantidade de respostas corretas.
 * `total_questoes`: quantidade total de questões consideradas na tentativa.
 * `data_realizacao`: data e hora do registro.
+* `tentativa_uuid`: identificador UUID único da tentativa, gerado automaticamente. É utilizado para reconhecer reenvios da mesma tentativa durante a sincronização e evitar registros duplicados.
 
 A tabela possui restrições que impedem valores negativos de acertos, totais de questões menores ou iguais a zero e quantidades de acertos superiores ao total de questões.
 
-A estrutura permite relacionar cada tentativa a um usuário e a uma atividade. Entretanto, o fluxo de gravação segura dos resultados pela interface ainda precisa ser implementado.
+A estrutura relaciona cada tentativa a um usuário e a uma atividade. O registro dos resultados é realizado pela função `public.corrigir_atividade()`, que grava a pontuação e o UUID da tentativa. O identificador é reutilizado em reenvios para evitar a criação de resultados duplicados.
 
 ### 3.7. private.gabaritos
 
@@ -141,7 +142,7 @@ Principais campos:
 
 A separação das respostas corretas em um esquema privado busca impedir o acesso direto ao gabarito pelos papéis públicos da aplicação. Foram configuradas permissões para negar o acesso direto dessa tabela aos papéis `anon` e `authenticated`.
 
-A implementação de um mecanismo seguro para validar as respostas e calcular os resultados deverá ser concluída no back-end antes da disponibilização das atividades.
+A função `public.corrigir_atividade()` realiza a validação e o cálculo dos resultados no servidor. O front-end envia os identificadores das questões e as alternativas escolhidas; a função consulta os registros desta tabela privada sem conceder acesso direto ao gabarito.
 
 ## 4. Relacionamentos entre as tabelas
 
@@ -164,23 +165,36 @@ Foi configurada uma função com um gatilho que cria automaticamente o perfil ap
 
 Também foi habilitada a segurança em nível de linha (*Row Level Security — RLS*) nas tabelas. Foram estabelecidas políticas iniciais para permitir a consulta dos conteúdos ativos e restringir o acesso aos perfis e resultados dos usuários conforme as permissões definidas.
 
-Atualmente, as políticas de perfil permitem consultar e atualizar o próprio registro, além de inserir o perfil correspondente ao usuário autenticado. Para a tabela `resultados`, foi configurada a consulta dos próprios registros, enquanto a política de inserção ainda precisa ser implementada.
+As políticas de perfil permitem consultar e atualizar o próprio registro, além de inserir o perfil correspondente ao usuário autenticado. Para `resultados`, a consulta dos próprios registros é controlada por RLS. A gravação da pontuação ocorre por meio da função `public.corrigir_atividade()` com `SECURITY DEFINER`, após validação do usuário autenticado com `auth.uid()`; por isso, a interface não faz inserção direta na tabela.
 
-A tabela `private.gabaritos` permanece sem acesso direto concedido aos papéis públicos da aplicação. A validação das respostas deverá ser realizada por um mecanismo seguro no servidor.
+A tabela `private.gabaritos` permanece sem acesso direto concedido aos papéis públicos da aplicação. A validação das respostas é realizada pela função `public.corrigir_atividade()`, criada com `SECURITY DEFINER`, `search_path` vazio e permissão de execução concedida somente ao papel `authenticated`. A função identifica o usuário por meio de `auth.uid()`, consulta os gabaritos no esquema privado, calcula os acertos e registra o resultado. O identificador `tentativa_uuid` permite reconhecer uma tentativa já processada e evitar gravações duplicadas.
 
 As credenciais e chaves secretas devem permanecer fora do código-fonte publicado no GitHub e não devem ser expostas no front-end.
 
-## 6. Versionamento do banco de dados
+## 6. Funcionamento offline e sincronização
+
+A aplicação combina pré-carregamento global, IndexedDB e Service Worker para disponibilizar os conteúdos já obtidos em uma sessão online.
+
+* **Pré-carregamento global:** durante a inicialização online, a aplicação consulta `public.modulos`, `public.palavras`, `public.atividades` e `public.questoes`. O conjunto é validado antes de ser armazenado: cinco módulos, 43 palavras, três atividades e 15 questões, com cinco questões por atividade e alternativas A–D.
+* **IndexedDB:** o banco local `tanu-tyura-offline` (versão 2) possui os stores `modules`, `words`, `activities`, `questions` e `attempts`. Os conteúdos públicos são compartilhados; as tentativas são associadas ao identificador do usuário. O pré-carregamento não armazena gabaritos.
+* **Preservação do cache:** consultas com falha ou conjuntos incompletos não substituem o conteúdo local anteriormente válido. Atualizações de conteúdo não devem apagar tentativas pendentes.
+* **Service Worker:** mantém o shell e os recursos estáticos permitidos em Cache Storage e oferece fallback para a navegação quando a rede não está disponível. Requisições ao Supabase, credenciais, respostas autenticadas e tentativas não são armazenadas no Cache Storage.
+* **Tentativas pendentes:** ao finalizar uma atividade offline, a aplicação grava no IndexedDB o UUID, o usuário, a atividade e as cinco respostas no formato `{ questao_id, resposta }`.
+* **Sincronização e correção:** quando a conexão retorna e há sessão autenticada válida, as tentativas pendentes são enviadas à função `public.corrigir_atividade()`. O mesmo UUID é reutilizado. Após confirmação válida do servidor, o resultado é salvo localmente e a tentativa é marcada como sincronizada.
+
+Como a correção acontece no servidor, a pontuação definitiva só é exibida após a sincronização. O estudante precisa ter aberto a plataforma com internet ao menos uma vez para obter os arquivos e conteúdos. Login, cadastro, renovação de sessão expirada, sincronização e correção definitiva continuam dependendo de conexão. A reprodução de áudios hospedados externamente também depende de os arquivos estarem disponíveis localmente; a implementação atual não garante o armazenamento desses áudios.
+
+## 7. Versionamento do banco de dados
 
 A estrutura do banco foi extraída do projeto remoto com o Supabase CLI, gerando uma migração SQL versionada no repositório.
 
-O arquivo `supabase/migrations/20261017001524_remote_schema.sql` registra a estrutura do banco, incluindo tabelas, relacionamentos, funções, gatilhos e políticas de segurança identificados durante a extração.
+O arquivo `supabase/migrations/20261017001524_remote_schema.sql` registra a estrutura inicial do banco, incluindo tabelas, relacionamentos, funções, gatilhos e políticas de segurança identificados durante a extração. A migração `supabase/migrations/20261115010000_activity_correction_and_offline.sql` registra a inclusão do identificador `tentativa_uuid` e a criação da função `public.corrigir_atividade()`.
 
-O arquivo `supabase/seed.sql` contém os dados iniciais dos cinco módulos e das 43 palavras, permitindo reproduzir esses dados em outro ambiente após a criação das tabelas e das restrições correspondentes.
+O arquivo `supabase/seed.sql` contém os dados iniciais dos cinco módulos, das 43 palavras, das três atividades, das 15 questões e dos respectivos gabaritos. Os comandos de inserção foram organizados para evitar duplicação quando o arquivo for executado novamente.
 
 A migração e o arquivo de dados iniciais foram enviados ao GitHub. O `seed.sql` foi versionado, mas não foi executado novamente no banco remoto após essa etapa.
 
-## 7. Estado atual do desenvolvimento
+## 8. Estado atual do desenvolvimento
 
 Até o momento, foram realizadas as seguintes etapas:
 
@@ -190,13 +204,18 @@ Até o momento, foram realizadas as seguintes etapas:
 * Configuração e teste do gatilho de criação automática de perfil.
 * Cadastro dos cinco módulos de aprendizagem.
 * Cadastro das 43 palavras iniciais.
+* Cadastro de três atividades, 15 questões e 15 gabaritos.
 * Integração dos módulos e do dicionário à interface do projeto.
 * Ajuste da pesquisa do dicionário para encontrar correspondências no início do termo em Kambeba ou da tradução em português.
 * Geração da migração SQL e versionamento da estrutura e dos dados iniciais no GitHub.
 
-Permanecem como etapas de desenvolvimento a implementação das atividades e questões, a validação segura das respostas, a gravação dos resultados, a incorporação dos áudios e o funcionamento offline com armazenamento local e sincronização.
+Na branch `feature/atividades-supabase-offline`, a implementação atual integra as atividades ao Supabase e utiliza IndexedDB para o armazenamento local dos conteúdos públicos e das tentativas. O pré-carregamento global prepara os cinco módulos, as 43 palavras, as três atividades e as 15 questões sem exigir que o estudante abra individualmente cada seção. O Service Worker mantém o shell e os recursos permitidos em cache. A correção das atividades continua centralizada na função `public.corrigir_atividade()`, sem copiar os gabaritos para o navegador.
 
-## 8. Considerações finais
+Foram relatados testes de compilação TypeScript e build, testes de persistência/migração do IndexedDB em Chromium, validação das quantidades de conteúdo e teste dos três níveis de atividade no preview. A mensagem de registro do Service Worker também foi observada no Console do preview do Figma Make. A validação ponta a ponta da versão exportada e sincronizada com o GitHub, incluindo reabertura após atualização completa offline e sincronização autenticada em condições reais, deve continuar antes da incorporação à branch principal.
+
+Permanecem como etapas futuras a instalação como PWA, a estratégia de autorização local para acesso offline, a disponibilização dos áudios sem conexão e os testes finais de usabilidade e acessibilidade.
+
+## 9. Considerações finais
 
 A estrutura do banco de dados do Tanu-Tyura foi organizada para separar os dados de perfil, os conteúdos linguísticos, as atividades, as questões e os resultados. O uso de um banco relacional permite representar as associações entre essas entidades e estabelecer restrições de integridade.
 

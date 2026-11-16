@@ -1,0 +1,36 @@
+name: Validar aplicação
+
+on:
+  push:
+    branches:
+      - "feature/atividades-supabase-offline"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Instalar dependências
+        run: pnpm install --frozen-lockfile
+
+      - name: Verificar tipos TypeScript
+        run: pnpm exec tsc --noEmit
+
+      - name: Gerar build de produção
+        run: pnpm build
