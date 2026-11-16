@@ -1,22 +1,24 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { AuthError, Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
+import { correctStoredAttempt } from "./lib/activitySync";
+import { inspectOfflineContent, preloadOfflineContent } from "./lib/contentPreload";
 import {
   cacheActivities,
-  cacheQuestionsForActivity,
+  cacheModules,
+  cacheQuestions,
+  cacheWords,
+  countPendingAttempts,
   getCachedActivities,
+  getCachedModules,
   getCachedQuestions,
+  getCachedWords,
   getPendingAttempts,
-  removePendingAttempt,
+  keepAttemptPending,
+  markAttemptSynced,
   savePendingAttempt,
-} from "./lib/activityStorage";
-import type {
-  ActivityLevelCode,
-  ActivityQuestion,
-  AnswerChoice,
-  LearningActivity,
-  PendingAttempt,
-} from "./lib/activityStorage";
+} from "./lib/offline";
+import type { OfflineAttempt } from "./lib/offline";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +34,34 @@ type Screen =
   | "result";
 
 type Level = "Fácil" | "Médio" | "Avançado";
+type AnswerOption = "A" | "B" | "C" | "D";
+
+type LearningActivity = {
+  id: number;
+  titulo: string;
+  descricao: string;
+  nivel: "facil" | "medio" | "avancado";
+};
+
+type ActivityQuestion = {
+  id: number;
+  atividade_id: number;
+  enunciado: string;
+  alternativas: Record<AnswerOption, string>;
+  ordem: number;
+};
+
+type ActivityAnswer = {
+  questao_id: number;
+  resposta: AnswerOption;
+};
+
+type SupabaseErrorDetails = {
+  code?: string;
+  message?: string;
+  details?: string;
+  hint?: string;
+};
 
 type AuthActionResult = {
   error?: string;
@@ -92,86 +122,49 @@ const getAuthErrorMessage = (error: AuthError | Error) => {
   return "Não foi possível concluir a autenticação. Tente novamente.";
 };
 
-// ─── Activity helpers ──────────────────────────────────────────────────────────
-
-const LEVEL_LABELS: Record<ActivityLevelCode, Level> = {
-  facil: "Fácil",
-  medio: "Médio",
-  avancado: "Avançado",
+const logSupabaseError = (context: string, error: SupabaseErrorDetails) => {
+  console.error(`[Tanu-Tyura] ${context}`, {
+    code: error.code ?? null,
+    message: error.message ?? null,
+    details: error.details ?? null,
+    hint: error.hint ?? null,
+  });
 };
 
-const LEVEL_STYLES: Record<ActivityLevelCode, { color: string; bg: string; fallbackDescription: string }> = {
-  facil: {
-    color: "#4A6741",
-    bg: "#eaf3e8",
-    fallbackDescription: "Reconhecimento de palavras e significados.",
-  },
-  medio: {
-    color: "#A64D25",
-    bg: "#fdf0e8",
-    fallbackDescription: "Associação e compreensão do vocabulário.",
-  },
-  avancado: {
-    color: "#6B4423",
-    bg: "#f2ebe3",
-    fallbackDescription: "Aplicação dos conhecimentos adquiridos.",
-  },
-};
+const getActivityCorrectionErrorMessage = (error: SupabaseErrorDetails) => {
+  const message = error.message?.toLocaleLowerCase("pt-BR") ?? "";
+  const isNetworkFailure = !navigator.onLine
+    || message.includes("failed to fetch")
+    || message.includes("network")
+    || message.includes("load failed");
 
-const ANSWER_CHOICES: AnswerChoice[] = ["A", "B", "C", "D"];
-
-type CorrectionResult = {
-  resultado_id: number;
-  tentativa_uuid: string;
-  acertos: number;
-  total_questoes: number;
-  data_realizacao: string;
-  ja_processada: boolean;
-};
-
-const isActivityLevelCode = (value: unknown): value is ActivityLevelCode =>
-  value === "facil" || value === "medio" || value === "avancado";
-
-const isAnswerChoice = (value: unknown): value is AnswerChoice =>
-  value === "A" || value === "B" || value === "C" || value === "D";
-
-const isValidAlternatives = (value: unknown): value is Record<AnswerChoice, string> => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const alternatives = value as Record<string, unknown>;
-  return ANSWER_CHOICES.every((choice) => typeof alternatives[choice] === "string");
-};
-
-async function synchronizePendingAttempts(userId: string): Promise<void> {
-  if (!navigator.onLine) return;
-
-  let attempts: PendingAttempt[];
-  try {
-    attempts = await getPendingAttempts(userId);
-  } catch {
-    return;
+  if (isNetworkFailure) {
+    return "Sem conexão com a internet. Reconecte-se para finalizar a atividade.";
   }
 
-  for (const attempt of attempts) {
-    try {
-      const { data, error } = await supabase.rpc("corrigir_atividade", {
-        p_tentativa_uuid: attempt.tentativa_uuid,
-        p_atividade_id: attempt.atividade_id,
-        p_respostas: attempt.respostas,
-      });
+  const code = error.code ?? "";
 
-      if (error || !data || typeof data.acertos !== "number" || typeof data.total_questoes !== "number") {
-        continue;
-      }
-
-      await removePendingAttempt(attempt.tentativa_uuid);
-      window.dispatchEvent(
-        new CustomEvent<CorrectionResult>("tanu-tyura-attempt-synced", { detail: data as CorrectionResult }),
-      );
-    } catch {
-      // A tentativa permanece no IndexedDB para uma nova sincronização.
-    }
+  if (code === "42501" || code === "PGRST301" || message.includes("permission denied") || message.includes("jwt")) {
+    return "Sua sessão não tem autorização para corrigir esta atividade. Entre novamente e tente de novo.";
   }
-}
+  if (code === "PGRST202" || message.includes("schema cache") || message.includes("could not find the function")) {
+    return "O serviço de correção não está disponível com o contrato esperado. A atividade não foi registrada.";
+  }
+  if (
+    code === "22P02"
+    || code === "22023"
+    || code === "PGRST102"
+    || message.includes("json")
+    || message.includes("recordset")
+  ) {
+    return "O servidor rejeitou o formato das respostas enviadas. A atividade não foi registrada.";
+  }
+  if (code === "23503" || message.includes("foreign key")) {
+    return "Os dados desta atividade estão inconsistentes no servidor. A atividade não foi registrada.";
+  }
+
+  return `A correção falhou no servidor${code ? ` (código ${code})` : ""}. Tente novamente.`;
+};
 
 // ─── Icons (inline SVG) ───────────────────────────────────────────────────────
 
@@ -306,25 +299,19 @@ const Logo = ({ size = "md" }: { size?: "sm" | "md" | "lg" }) => {
 
 const Sidebar = ({
   active,
+  isOnline,
+  pendingCount,
   onNavigate,
   onLogout,
   onClose,
 }: {
   active: Screen;
+  isOnline: boolean;
+  pendingCount: number;
   onNavigate: (s: Screen) => void;
   onLogout: () => void;
   onClose: () => void;
 }) => {
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => { window.removeEventListener("online", handleOnline); window.removeEventListener("offline", handleOffline); };
-  }, []);
-
   const navItems = [
     { screen: "home" as Screen, label: "Início", icon: <IconHome /> },
     { screen: "modules" as Screen, label: "Módulos", icon: <IconBook /> },
@@ -391,6 +378,15 @@ const Sidebar = ({
           {isOnline ? <IconWifi /> : <IconWifiOff />}
           <span>{isOnline ? "Online" : "Offline"}</span>
         </div>
+        {pendingCount > 0 && (
+          <div
+            className="rounded-lg px-3 py-2 text-xs"
+            style={{ backgroundColor: "rgba(245,230,211,0.12)", color: "#F5E6D3" }}
+            aria-live="polite"
+          >
+            {pendingCount} {pendingCount === 1 ? "tentativa pendente" : "tentativas pendentes"}
+          </div>
+        )}
 
         <button
           onClick={onLogout}
@@ -412,20 +408,37 @@ const AppLayout = ({
   activeScreen,
   onNavigate,
   onLogout,
+  isOnline,
+  pendingCount,
+  isSyncing,
+  onSync,
+  offlinePreparation,
   notice,
+  onDismissNotice,
   error,
 }: {
   children: React.ReactNode;
   activeScreen: Screen;
   onNavigate: (s: Screen) => void;
   onLogout: () => void;
+  isOnline: boolean;
+  pendingCount: number;
+  isSyncing: boolean;
+  onSync: () => void;
+  offlinePreparation: {
+    state: "idle" | "preparing" | "ready" | "error" | "local-ready" | "local-incomplete";
+    message: string;
+  };
   notice?: string;
+  onDismissNotice: () => void;
   error?: string;
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const toastIdRef = useRef(0);
+  const [successQueue, setSuccessQueue] = useState<Array<{ id: number; message: string }>>([]);
 
   const closeMenu = () => {
     setMenuOpen(false);
@@ -440,6 +453,39 @@ const AppLayout = ({
   useEffect(() => {
     mainRef.current?.focus();
   }, [activeScreen]);
+
+  const enqueueSuccess = useCallback((message: string) => {
+    setSuccessQueue((currentQueue) => {
+      if (currentQueue.some((notification) => notification.message === message)) {
+        return currentQueue;
+      }
+      return [...currentQueue, { id: ++toastIdRef.current, message }];
+    });
+  }, []);
+
+  const dismissCurrentSuccess = useCallback(() => {
+    setSuccessQueue((currentQueue) => currentQueue.slice(1));
+  }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    enqueueSuccess(notice);
+    onDismissNotice();
+  }, [enqueueSuccess, notice, onDismissNotice]);
+
+  useEffect(() => {
+    if (offlinePreparation.state === "ready") {
+      enqueueSuccess(offlinePreparation.message);
+    }
+  }, [enqueueSuccess, offlinePreparation.message, offlinePreparation.state]);
+
+  const currentSuccess = successQueue[0];
+
+  useEffect(() => {
+    if (!currentSuccess) return;
+    const timer = window.setTimeout(dismissCurrentSuccess, 3000);
+    return () => window.clearTimeout(timer);
+  }, [currentSuccess, dismissCurrentSuccess]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -494,14 +540,88 @@ const AppLayout = ({
           menuOpen ? "visible translate-x-0" : "invisible -translate-x-full lg:visible"
         }`}
       >
-        <Sidebar active={activeScreen} onNavigate={navigate} onLogout={onLogout} onClose={closeMenu} />
+        <Sidebar
+          active={activeScreen}
+          isOnline={isOnline}
+          pendingCount={pendingCount}
+          onNavigate={navigate}
+          onLogout={onLogout}
+          onClose={closeMenu}
+        />
       </div>
 
       <main id="main-content" ref={mainRef} className="min-w-0 flex-1 overflow-y-auto" tabIndex={-1}>
-        {notice && (
+        {currentSuccess && (
+          <div
+            key={currentSuccess.id}
+            role="status"
+            aria-live="polite"
+            className="mx-4 mt-4 flex min-h-10 items-center rounded-2xl border px-4 py-2 text-sm sm:mx-8"
+            style={{ backgroundColor: "#dcfce7", color: "#166534", borderColor: "#86efac" }}
+          >
+            <p className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">
+              {currentSuccess.message}
+            </p>
+          </div>
+        )}
+        {(offlinePreparation.state === "preparing"
+          || offlinePreparation.state === "error"
+          || offlinePreparation.state === "local-incomplete") && (
+          <div
+            role={offlinePreparation.state === "error" || offlinePreparation.state === "local-incomplete" ? "alert" : "status"}
+            className="mx-auto mt-4 max-w-4xl px-4"
+            aria-live="polite"
+          >
+            <div
+              className="rounded-xl p-3 text-sm"
+              style={{
+                backgroundColor: offlinePreparation.state === "preparing"
+                  ? "#eff6ff"
+                  : offlinePreparation.state === "error" || offlinePreparation.state === "local-incomplete"
+                    ? "#fff7ed"
+                    : "#ecfdf5",
+                color: offlinePreparation.state === "preparing"
+                  ? "#1e40af"
+                  : offlinePreparation.state === "error" || offlinePreparation.state === "local-incomplete"
+                    ? "#9a3412"
+                    : "#166534",
+                border: `1px solid ${
+                  offlinePreparation.state === "preparing"
+                    ? "#93c5fd"
+                    : offlinePreparation.state === "error" || offlinePreparation.state === "local-incomplete"
+                      ? "#fdba74"
+                      : "#86efac"
+                }`,
+              }}
+            >
+              {offlinePreparation.message}
+            </div>
+          </div>
+        )}
+        {!isOnline && (
           <div role="status" className="mx-auto mt-4 max-w-4xl px-4">
-            <div className="rounded-xl p-3 text-sm" style={{ backgroundColor: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>
-              {notice}
+            <div className="rounded-xl p-3 text-sm" style={{ backgroundColor: "#fff7ed", color: "#9a3412", border: "1px solid #fdba74" }}>
+              Você está offline. Atividades já carregadas continuam disponíveis e as tentativas serão sincronizadas quando a conexão retornar.
+            </div>
+          </div>
+        )}
+        {pendingCount > 0 && (
+          <div role="status" className="mx-auto mt-4 max-w-4xl px-4">
+            <div className="flex flex-col items-start justify-between gap-3 rounded-xl p-3 text-sm sm:flex-row sm:items-center" style={{ backgroundColor: "#fefce8", color: "#854d0e", border: "1px solid #fde047" }}>
+              <span>
+                {pendingCount} {pendingCount === 1 ? "tentativa aguarda" : "tentativas aguardam"} sincronização.
+              </span>
+              {isOnline && (
+                <button
+                  type="button"
+                  onClick={onSync}
+                  disabled={isSyncing}
+                  className="rounded-lg px-4 py-2 text-xs font-semibold text-white"
+                  style={{ backgroundColor: isSyncing ? "#8B6F47" : "#A64D25" }}
+                >
+                  {isSyncing ? "Sincronizando…" : "Sincronizar agora"}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -930,25 +1050,40 @@ const DictionaryScreen = () => {
       setError("");
 
       try {
-        const { data, error: queryError } = await supabase
-          .from("palavras")
-          .select("id, termo_kambeba, traducao_portugues")
-          .eq("ativo", true)
-          .order("termo_kambeba", { ascending: true })
-          .order("id", { ascending: true });
+        if (navigator.onLine) {
+          const { data, error: queryError } = await supabase
+            .from("palavras")
+            .select("id, modulo_id, termo_kambeba, traducao_portugues, audio_url")
+            .eq("ativo", true)
+            .order("termo_kambeba", { ascending: true })
+            .order("id", { ascending: true });
 
-        if (!active) return;
-
-        if (queryError) {
-          setWords([]);
-          setError("Não foi possível carregar o dicionário. Verifique sua conexão e tente novamente.");
-        } else {
-          setWords(data ?? []);
+          if (!queryError) {
+            await cacheWords(data ?? []);
+            if (active) setWords(data ?? []);
+            return;
+          }
+          logSupabaseError("Falha ao atualizar dicionário; usando cache local", queryError);
         }
-      } catch {
+
+        const cachedWords = (await getCachedWords()).sort((first, second) =>
+          first.termo_kambeba.localeCompare(second.termo_kambeba, "pt-BR")
+          || first.id - second.id
+        );
+        if (!active) return;
+        setWords(cachedWords);
+        if (cachedWords.length === 0) {
+          setError("O dicionário ainda não foi carregado neste dispositivo. Conecte-se para preparar o acesso offline.");
+        }
+      } catch (loadError) {
         if (!active) return;
         setWords([]);
-        setError("Não foi possível carregar o dicionário. Verifique sua conexão e tente novamente.");
+        console.error("[Tanu-Tyura] Falha ao carregar dicionário online ou offline", loadError);
+        setError(
+          navigator.onLine
+            ? "Não foi possível carregar o dicionário do servidor nem do armazenamento local."
+            : "O dicionário ainda não está disponível offline neste dispositivo.",
+        );
       } finally {
         if (active) setIsLoading(false);
       }
@@ -1075,21 +1210,40 @@ const ModulesScreen = ({ onSelectModule }: { onSelectModule: (module: LearningMo
       setIsLoading(true);
       setError("");
 
-      const { data, error: queryError } = await supabase
-        .from("modulos")
-        .select("id, nome, descricao, ordem")
-        .eq("ativo", true)
-        .order("ordem", { ascending: true });
+      try {
+        if (navigator.onLine) {
+          const { data, error: queryError } = await supabase
+            .from("modulos")
+            .select("id, nome, descricao, ordem")
+            .eq("ativo", true)
+            .order("ordem", { ascending: true });
 
-      if (!active) return;
+          if (!queryError) {
+            await cacheModules(data ?? []);
+            if (active) setModules(data ?? []);
+            return;
+          }
+          logSupabaseError("Falha ao atualizar módulos; usando cache local", queryError);
+        }
 
-      if (queryError) {
+        const cachedModules = await getCachedModules();
+        if (!active) return;
+        setModules(cachedModules);
+        if (cachedModules.length === 0) {
+          setError("Os módulos ainda não foram carregados neste dispositivo. Conecte-se para preparar o acesso offline.");
+        }
+      } catch (loadError) {
+        if (!active) return;
         setModules([]);
-        setError("Não foi possível carregar os módulos. Verifique sua conexão e tente novamente.");
-      } else {
-        setModules(data ?? []);
+        console.error("[Tanu-Tyura] Falha ao carregar módulos online ou offline", loadError);
+        setError(
+          navigator.onLine
+            ? "Não foi possível carregar os módulos do servidor nem do armazenamento local."
+            : "Os módulos ainda não estão disponíveis offline neste dispositivo.",
+        );
+      } finally {
+        if (active) setIsLoading(false);
       }
-      setIsLoading(false);
     };
 
     loadModules();
@@ -1200,25 +1354,37 @@ const ModuleContentScreen = ({
       setIndex(0);
 
       try {
-        const { data, error: queryError } = await supabase
-          .from("palavras")
-          .select("id, modulo_id, termo_kambeba, traducao_portugues, audio_url")
-          .eq("modulo_id", module.id)
-          .eq("ativo", true)
-          .order("id", { ascending: true });
+        if (navigator.onLine) {
+          const { data, error: queryError } = await supabase
+            .from("palavras")
+            .select("id, modulo_id, termo_kambeba, traducao_portugues, audio_url")
+            .eq("modulo_id", module.id)
+            .eq("ativo", true)
+            .order("id", { ascending: true });
 
-        if (!active) return;
-
-        if (queryError) {
-          setWords([]);
-          setError("Não foi possível carregar as palavras deste módulo. Verifique sua conexão e tente novamente.");
-        } else {
-          setWords(data ?? []);
+          if (!queryError) {
+            await cacheWords(data ?? []);
+            if (active) setWords(data ?? []);
+            return;
+          }
+          logSupabaseError(`Falha ao atualizar palavras do módulo ${module.id}; usando cache local`, queryError);
         }
-      } catch {
+
+        const cachedWords = await getCachedWords(module.id);
+        if (!active) return;
+        setWords(cachedWords);
+        if (cachedWords.length === 0) {
+          setError("O conteúdo deste módulo ainda não foi carregado neste dispositivo.");
+        }
+      } catch (loadError) {
         if (!active) return;
         setWords([]);
-        setError("Não foi possível carregar as palavras deste módulo. Verifique sua conexão e tente novamente.");
+        console.error("[Tanu-Tyura] Falha ao carregar conteúdo do módulo online ou offline", loadError);
+        setError(
+          navigator.onLine
+            ? "Não foi possível carregar este módulo do servidor nem do armazenamento local."
+            : "O conteúdo deste módulo ainda não está disponível offline neste dispositivo.",
+        );
       } finally {
         if (active) setIsLoading(false);
       }
@@ -1337,7 +1503,7 @@ const ModuleContentScreen = ({
             <p className="mb-4 break-words text-4xl font-bold sm:text-5xl" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>{word.termo_kambeba}</p>
             <p className="break-words text-lg" style={{ color: "#A64D25", fontWeight: 500 }}>{word.traducao_portugues}</p>
 
-            {audioUrl && (
+            {audioUrl && navigator.onLine && (
               <button
                 type="button"
                 onClick={handleAudio}
@@ -1349,6 +1515,11 @@ const ModuleContentScreen = ({
                 <IconVolume />
                 {isPlaying ? "Reproduzindo…" : "Ouvir pronúncia"}
               </button>
+            )}
+            {audioUrl && !navigator.onLine && (
+              <p className="mt-5 text-xs" style={{ color: "#6B4423" }}>
+                O áudio estará disponível quando a conexão retornar.
+              </p>
             )}
             {audioError && <p role="alert" className="mt-3 text-xs" style={{ color: "#6B4423" }}>{audioError}</p>}
           </div>
@@ -1400,15 +1571,18 @@ const ModuleContentScreen = ({
 
 // ─── Screen: Activities ───────────────────────────────────────────────────────
 
-const ActivitiesScreen = ({
-  onSelectActivity,
-}: {
-  onSelectActivity: (activity: LearningActivity) => void;
-}) => {
+const levelDetails: Record<LearningActivity["nivel"], { label: Level; color: string; bg: string }> = {
+  facil: { label: "Fácil", color: "#4A6741", bg: "#eaf3e8" },
+  medio: { label: "Médio", color: "#A64D25", bg: "#fdf0e8" },
+  avancado: { label: "Avançado", color: "#6B4423", bg: "#f2ebe3" },
+};
+
+const ActivitiesScreen = ({ onSelectActivity }: { onSelectActivity: (activity: LearningActivity) => void }) => {
   const [activities, setActivities] = useState<LearningActivity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isUsingCache, setIsUsingCache] = useState(false);
   const [error, setError] = useState("");
+  const [preparationMessage, setPreparationMessage] = useState("");
+  const [preparationFailed, setPreparationFailed] = useState(false);
   const [requestKey, setRequestKey] = useState(0);
 
   useEffect(() => {
@@ -1417,54 +1591,110 @@ const ActivitiesScreen = ({
     const loadActivities = async () => {
       setIsLoading(true);
       setError("");
-      setIsUsingCache(false);
+      setPreparationMessage("");
+      setPreparationFailed(false);
 
-      if (navigator.onLine) {
-        try {
+      try {
+        if (navigator.onLine) {
           const { data, error: queryError } = await supabase
             .from("atividades")
             .select("id, titulo, descricao, nivel")
             .eq("ativo", true)
             .order("id", { ascending: true });
 
-          if (queryError) throw queryError;
-
-          const validActivities = (data ?? []).filter(
-            (activity): activity is LearningActivity => isActivityLevelCode(activity.nivel),
-          );
-
-          if (!active) return;
-          setActivities(validActivities);
-          try {
+          if (!queryError) {
+            const validActivities = (data ?? []).filter(
+              (activity): activity is LearningActivity => activity.nivel in levelDetails,
+            );
             await cacheActivities(validActivities);
-          } catch {
-            // A consulta online continua disponível mesmo se o navegador bloquear o cache.
-          }
-          setIsLoading(false);
-          return;
-        } catch {
-          // Tenta utilizar a última cópia local disponível.
-        }
-      }
 
-      try {
+            const activityIds = validActivities.map((activity) => activity.id);
+            const { data: questionData, error: questionError } = await supabase
+              .from("questoes")
+              .select("id, atividade_id, enunciado, alternativas, ordem")
+              .in("atividade_id", activityIds)
+              .eq("ativo", true)
+              .order("atividade_id", { ascending: true })
+              .order("ordem", { ascending: true });
+
+            if (questionError) {
+              logSupabaseError("Falha ao preparar todas as questões para uso offline", questionError);
+              if (active) {
+                setPreparationFailed(true);
+                setPreparationMessage("As atividades estão disponíveis online, mas não foi possível atualizar agora o conteúdo offline.");
+              }
+            } else {
+              const loadedQuestions = (questionData ?? []) as ActivityQuestion[];
+              const hasCompleteQuestionSet = validActivities.length === 3
+                && loadedQuestions.length === 15
+                && validActivities.every((activity) =>
+                  loadedQuestions.filter((question) => question.atividade_id === activity.id).length === 5
+                )
+                && loadedQuestions.every((question) =>
+                  ["A", "B", "C", "D"].every((key) =>
+                    typeof question.alternativas?.[key as keyof ActivityQuestion["alternativas"]] === "string"
+                  )
+                );
+
+              if (hasCompleteQuestionSet) {
+                await cacheQuestions(loadedQuestions);
+                if (active) setPreparationMessage("As três atividades estão preparadas para uso offline.");
+              } else {
+                console.error("[Tanu-Tyura] Conjunto de questões incompleto; cache anterior preservado", {
+                  atividades: validActivities.length,
+                  questoes: loadedQuestions.length,
+                  porAtividade: validActivities.map((activity) => ({
+                    atividade_id: activity.id,
+                    quantidade: loadedQuestions.filter((question) => question.atividade_id === activity.id).length,
+                  })),
+                });
+                if (active) {
+                  setPreparationFailed(true);
+                  setPreparationMessage("Os dados recebidos estão incompletos. O conteúdo offline anterior foi preservado.");
+                }
+              }
+            }
+
+            if (active) setActivities(validActivities);
+            return;
+          }
+          logSupabaseError("Falha ao atualizar atividades; usando cache local", queryError);
+        }
+
         const cachedActivities = await getCachedActivities();
         if (!active) return;
         setActivities(cachedActivities);
-        setIsUsingCache(cachedActivities.length > 0);
         if (cachedActivities.length === 0) {
-          setError("As atividades ainda não foram armazenadas neste dispositivo. Conecte-se à internet para carregá-las.");
+          setError("Nenhuma atividade foi carregada anteriormente neste dispositivo. Conecte-se para preparar o acesso offline.");
+        } else {
+          const cachedQuestionSets = await Promise.all(
+            cachedActivities.map((activity) => getCachedQuestions(activity.id)),
+          );
+          if (!active) return;
+          const allActivitiesAvailable = cachedActivities.length === 3
+            && cachedQuestionSets.every((questions) => questions.length === 5);
+          setPreparationFailed(!allActivitiesAvailable);
+          setPreparationMessage(
+            allActivitiesAvailable
+              ? "As três atividades estão disponíveis offline."
+              : "Algumas atividades ainda não possuem questões armazenadas neste dispositivo.",
+          );
         }
-      } catch {
+      } catch (loadError) {
         if (!active) return;
         setActivities([]);
-        setError("Não foi possível carregar as atividades. Verifique sua conexão e tente novamente.");
+        console.error("[Tanu-Tyura] Falha ao carregar atividades online ou offline", loadError);
+        setError(
+          navigator.onLine
+            ? "Não foi possível carregar as atividades do servidor nem do armazenamento local."
+            : "As atividades ainda não estão disponíveis offline neste dispositivo.",
+        );
       } finally {
         if (active) setIsLoading(false);
       }
     };
 
-    void loadActivities();
+    loadActivities();
     return () => {
       active = false;
     };
@@ -1475,81 +1705,102 @@ const ActivitiesScreen = ({
       <h1 className="text-3xl font-bold mb-1" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>Atividades</h1>
       <p className="text-sm mb-8" style={{ color: "#6B4423" }}>Escolha seu nível e comece a praticar</p>
 
-      {isUsingCache && (
-        <p className="mb-4 rounded-xl p-3 text-sm" style={{ backgroundColor: "#fdf0e8", color: "#6B4423" }} role="status">
-          Você está sem conexão. Exibindo atividades armazenadas neste dispositivo.
-        </p>
+      {!isLoading && preparationMessage && (
+        <div
+          role={preparationFailed ? "alert" : "status"}
+          className="mb-5 rounded-xl p-3 text-sm"
+          style={{
+            backgroundColor: preparationFailed ? "#fff7ed" : "#ecfdf5",
+            border: `1px solid ${preparationFailed ? "#fdba74" : "#86efac"}`,
+            color: preparationFailed ? "#9a3412" : "#166534",
+          }}
+        >
+          {preparationMessage}
+        </div>
       )}
 
-      {isLoading && <p role="status" className="text-sm mb-4" style={{ color: "#6B4423" }}>Carregando atividades…</p>}
+      {isLoading && (
+        <div role="status" className="rounded-2xl p-6 text-center text-sm" style={{ backgroundColor: "#E8D5C4", color: "#6B4423", border: "1.5px solid #D4A574" }}>
+          Carregando atividades…
+        </div>
+      )}
 
-      {error && (
-        <div className="rounded-xl p-4 mb-4" style={{ backgroundColor: "#fee2e2", color: "#991b1b" }} role="alert">
-          <p className="text-sm">{error}</p>
-          <button type="button" onClick={() => setRequestKey((key) => key + 1)} className="mt-3 text-sm font-semibold underline">
+      {!isLoading && error && (
+        <div role="alert" className="rounded-2xl p-6 text-center" style={{ backgroundColor: "#fef2f2", color: "#991b1b", border: "1px solid #fecaca" }}>
+          <p className="mb-4 text-sm">{error}</p>
+          <button type="button" onClick={() => setRequestKey((key) => key + 1)} className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white" style={{ backgroundColor: "#A64D25" }}>
             Tentar novamente
           </button>
         </div>
       )}
 
-      <div className="space-y-4">
+      {!isLoading && !error && activities.length === 0 && (
+        <div role="status" className="rounded-2xl p-6 text-center text-sm" style={{ backgroundColor: "#E8D5C4", color: "#6B4423", border: "1.5px solid #D4A574" }}>
+          Nenhuma atividade está disponível no momento.
+        </div>
+      )}
+
+      {!isLoading && !error && activities.length > 0 && <div className="space-y-4">
         {activities.map((activity) => {
-          const style = LEVEL_STYLES[activity.nivel];
+          const { label, color, bg } = levelDetails[activity.nivel];
           return (
-            <button
-              key={activity.id}
-              type="button"
-              onClick={() => onSelectActivity(activity)}
-              className="w-full flex items-center justify-between p-6 rounded-2xl text-left transition-all duration-200"
-              style={{ backgroundColor: style.bg, border: `2px solid ${style.color}22` }}
-              onMouseEnter={(event) => {
-                (event.currentTarget as HTMLElement).style.transform = "translateX(4px)";
-                (event.currentTarget as HTMLElement).style.borderColor = style.color;
-              }}
-              onMouseLeave={(event) => {
-                (event.currentTarget as HTMLElement).style.transform = "none";
-                (event.currentTarget as HTMLElement).style.borderColor = `${style.color}22`;
-              }}
-            >
-              <div>
-                <p className="font-bold text-lg mb-1" style={{ fontFamily: "Lora, serif", color: style.color }}>
-                  {activity.titulo}
-                </p>
-                <p className="text-sm" style={{ color: "#6B4423" }}>
-                  {activity.descricao || style.fallbackDescription}
-                </p>
-                <p className="text-xs mt-1" style={{ color: style.color }}>5 questões</p>
-              </div>
-              <div style={{ color: style.color }}>
-                <IconChevronRight />
-              </div>
-            </button>
+          <button
+            key={activity.id}
+            onClick={() => onSelectActivity(activity)}
+            className="w-full flex items-center justify-between p-6 rounded-2xl text-left transition-all duration-200"
+            style={{ backgroundColor: bg, border: `2px solid ${color}22` }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateX(4px)"; (e.currentTarget as HTMLElement).style.borderColor = color; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = "none"; (e.currentTarget as HTMLElement).style.borderColor = `${color}22`; }}
+          >
+            <div>
+              <p className="font-bold text-lg mb-1" style={{ fontFamily: "Lora, serif", color }}>
+                {activity.titulo}
+              </p>
+              <p className="text-sm" style={{ color: "#6B4423" }}>{activity.descricao}</p>
+              <p className="text-xs mt-1" style={{ color }}>
+                Nível {label.toLocaleLowerCase("pt-BR")} · 5 questões
+              </p>
+            </div>
+            <div style={{ color }}>
+              <IconChevronRight />
+            </div>
+          </button>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 };
+
+// ─── Screen: Question ─────────────────────────────────────────────────────────
 
 const QuestionScreen = ({
   activity,
   userId,
   onFinish,
+  onQueued,
+  onPendingChange,
   onBack,
 }: {
   activity: LearningActivity;
   userId: string;
-  onFinish: (attemptId: string) => void;
+  onFinish: (correct: number, total: number) => void;
+  onQueued: () => void;
+  onPendingChange: () => void;
   onBack: () => void;
 }) => {
   const [questions, setQuestions] = useState<ActivityQuestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isUsingCache, setIsUsingCache] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [requestKey, setRequestKey] = useState(0);
   const [qIndex, setQIndex] = useState(0);
-  const [selected, setSelected] = useState<AnswerChoice | null>(null);
-  const [answers, setAnswers] = useState<Record<number, AnswerChoice>>({});
-  const [isSaving, setIsSaving] = useState(false);
+  const [selected, setSelected] = useState<AnswerOption | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const [answers, setAnswers] = useState<Record<number, AnswerOption>>({});
+  const [attemptId] = useState(() => crypto.randomUUID());
+  const level = levelDetails[activity.nivel].label;
 
   useEffect(() => {
     let active = true;
@@ -1557,221 +1808,294 @@ const QuestionScreen = ({
     const loadQuestions = async () => {
       setIsLoading(true);
       setLoadError("");
-      setIsUsingCache(false);
 
-      if (navigator.onLine) {
-        try {
-          const { data, error: queryError } = await supabase
+      try {
+        let loadedQuestions: ActivityQuestion[] = [];
+
+        if (navigator.onLine) {
+          const { data, error } = await supabase
             .from("questoes")
             .select("id, atividade_id, enunciado, alternativas, ordem")
             .eq("atividade_id", activity.id)
             .eq("ativo", true)
-            .order("ordem", { ascending: true });
+            .order("ordem", { ascending: true })
+            .limit(5);
 
-          if (queryError) throw queryError;
-
-          const validQuestions: ActivityQuestion[] = (data ?? [])
-            .filter((question) => isValidAlternatives(question.alternativas))
-            .map((question) => ({
-              id: question.id,
-              atividade_id: question.atividade_id,
-              enunciado: question.enunciado,
-              alternativas: question.alternativas,
-              ordem: question.ordem,
-            }));
-
-          if (validQuestions.length !== 5) {
-            throw new Error("A atividade não possui exatamente cinco questões válidas.");
+          if (!error) {
+            loadedQuestions = (data ?? []) as ActivityQuestion[];
+            await cacheQuestions(loadedQuestions);
+          } else {
+            logSupabaseError("Falha ao atualizar questões; usando cache local", error);
           }
+        }
 
-          if (!active) return;
-          setQuestions(validQuestions);
-          try {
-            await cacheQuestionsForActivity(activity.id, validQuestions);
-          } catch {
-            // Mantém as questões em memória se o navegador não permitir o cache local.
-          }
-          setIsLoading(false);
+        if (loadedQuestions.length === 0) {
+          loadedQuestions = await getCachedQuestions(activity.id);
+        }
+        if (!active) return;
+
+        const hasInvalidOptions = loadedQuestions.some(
+          (question) => !["A", "B", "C", "D"].every((key) => typeof question.alternativas?.[key as keyof ActivityQuestion["alternativas"]] === "string"),
+        );
+        if (loadedQuestions.length !== 5 || hasInvalidOptions) {
+          setLoadError(
+            navigator.onLine
+              ? "Esta atividade não possui cinco questões válidas disponíveis."
+              : "Esta atividade ainda não foi preparada para uso offline. Abra-a uma vez enquanto estiver conectado.",
+          );
           return;
-        } catch {
-          // Tenta a cópia local caso a consulta online falhe.
         }
-      }
-
-      try {
-        const cachedQuestions = await getCachedQuestions(activity.id);
+        setQuestions(loadedQuestions);
+      } catch (loadError) {
         if (!active) return;
-        if (cachedQuestions.length !== 5) {
-          setQuestions([]);
-          setLoadError("As questões desta atividade ainda não foram armazenadas neste dispositivo. Conecte-se à internet para carregá-las primeiro.");
-        } else {
-          setQuestions(cachedQuestions);
-          setIsUsingCache(true);
-        }
-      } catch {
-        if (!active) return;
-        setQuestions([]);
-        setLoadError("Não foi possível carregar as questões. Verifique sua conexão e tente novamente.");
+        console.error("[Tanu-Tyura] Falha ao carregar questões online ou offline", loadError);
+        setLoadError(
+          navigator.onLine
+            ? "Não foi possível carregar as questões do servidor nem do armazenamento local."
+            : "Esta atividade ainda não está disponível offline neste dispositivo.",
+        );
       } finally {
         if (active) setIsLoading(false);
       }
     };
 
-    void loadQuestions();
+    loadQuestions();
     return () => {
       active = false;
     };
-  }, [activity.id]);
+  }, [activity.id, requestKey]);
 
   const current = questions[qIndex];
 
-  const handleNext = async () => {
-    if (!current || selected === null || isSaving) return;
+  const handleConfirm = () => {
+    if (selected === null || !current) return;
+    setAnswers((currentAnswers) => ({ ...currentAnswers, [current.id]: selected }));
+    setConfirmed(true);
+  };
 
-    const updatedAnswers = { ...answers, [current.id]: selected };
-    setAnswers(updatedAnswers);
+  const submitAnswers = async () => {
+    setIsSubmitting(true);
+    setSubmitError("");
 
-    if (qIndex + 1 < questions.length) {
-      setQIndex((index) => index + 1);
-      setSelected(null);
+    const completedAnswersByQuestion = {
+      ...answers,
+      ...(current && selected ? { [current.id]: selected } : {}),
+    };
+    const completedAnswers: ActivityAnswer[] = questions.flatMap((question) => {
+      const answer = completedAnswersByQuestion[question.id];
+      return answer ? [{ questao_id: Number(question.id), resposta: answer }] : [];
+    });
+
+    if (completedAnswers.length !== questions.length) {
+      setSubmitError("Confirme uma resposta para cada questão antes de finalizar.");
+      setIsSubmitting(false);
       return;
     }
 
-    const attemptId = crypto.randomUUID();
-    const attempt: PendingAttempt = {
+    const attempt: OfflineAttempt = {
       tentativa_uuid: attemptId,
       usuario_id: userId,
       atividade_id: activity.id,
-      respostas: questions.map((question) => ({
-        questao_id: question.id,
-        resposta: updatedAnswers[question.id],
-      })),
-      criada_em: new Date().toISOString(),
+      atividade_titulo: activity.titulo,
+      nivel: activity.nivel,
+      respostas: completedAnswers,
+      status: "pending",
+      criado_em: new Date().toISOString(),
     };
 
-    if (attempt.respostas.some((answer) => !answer.resposta)) {
-      setLoadError("Não foi possível registrar todas as respostas. Revise a atividade e tente novamente.");
-      return;
-    }
-
-    setIsSaving(true);
-    setLoadError("");
     try {
       await savePendingAttempt(attempt);
-      onFinish(attemptId);
-    } catch {
-      setLoadError("Não foi possível salvar sua tentativa neste dispositivo. Verifique o espaço disponível no navegador e tente novamente.");
+      onPendingChange();
+
+      if (!navigator.onLine) {
+        onQueued();
+        return;
+      }
+
+      console.info("[Tanu-Tyura] Enviando atividade para correção", attempt);
+      const { result, error } = await correctStoredAttempt(attempt);
+      if (error) {
+        logSupabaseError("Falha na RPC corrigir_atividade", error);
+        await keepAttemptPending(attempt, error.message);
+        onPendingChange();
+        setSubmitError(getActivityCorrectionErrorMessage(error));
+        return;
+      }
+
+      await markAttemptSynced(attempt, result);
+      onPendingChange();
+      onFinish(result.acertos, result.total_questoes);
+    } catch (error) {
+      const unexpectedError = error instanceof Error
+        ? { message: error.message }
+        : { message: String(error) };
+      logSupabaseError("Erro inesperado ao chamar corrigir_atividade", unexpectedError);
+      await keepAttemptPending(attempt, unexpectedError.message).catch((storageError) => {
+        console.error("[Tanu-Tyura] Não foi possível preservar a tentativa pendente", storageError);
+      });
+      onPendingChange();
+      setSubmitError(getActivityCorrectionErrorMessage(unexpectedError));
     } finally {
-      setIsSaving(false);
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleNext = () => {
+    if (qIndex + 1 >= questions.length) {
+      submitAnswers();
+    } else {
+      setQIndex((i) => i + 1);
+      setSelected(null);
+      setConfirmed(false);
+      setSubmitError("");
     }
   };
 
   if (isLoading) {
     return (
       <div className="page-container max-w-2xl">
-        <p role="status" className="text-sm" style={{ color: "#6B4423" }}>Carregando questões…</p>
-      </div>
-    );
-  }
-
-  if (loadError && questions.length === 0) {
-    return (
-      <div className="page-container max-w-2xl">
-        <button type="button" onClick={onBack} className="flex items-center gap-2 text-sm font-medium mb-6" style={{ color: "#6B4423" }}>
-          <IconChevronLeft /> Atividades
-        </button>
-        <div className="rounded-xl p-4" style={{ backgroundColor: "#fee2e2", color: "#991b1b" }} role="alert">
-          {loadError}
+        <div role="status" className="rounded-2xl p-8 text-center text-sm" style={{ backgroundColor: "#E8D5C4", color: "#6B4423", border: "1.5px solid #D4A574" }}>
+          Carregando questões…
         </div>
       </div>
     );
   }
 
-  if (!current) return null;
+  if (loadError || !current) {
+    return (
+      <div className="page-container max-w-2xl">
+        <div role="alert" className="rounded-2xl p-6 text-center" style={{ backgroundColor: "#fef2f2", color: "#991b1b", border: "1px solid #fecaca" }}>
+          <p className="mb-4 text-sm">{loadError || "Não foi possível abrir esta atividade."}</p>
+          <div className="flex flex-col justify-center gap-3 sm:flex-row">
+            <button type="button" onClick={() => setRequestKey((key) => key + 1)} className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white" style={{ backgroundColor: "#A64D25" }}>
+              Tentar novamente
+            </button>
+            <button type="button" onClick={onBack} className="rounded-xl px-5 py-2.5 text-sm font-semibold" style={{ border: "1.5px solid #D4A574", color: "#6B4423" }}>
+              Voltar às atividades
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  const levelLabel = LEVEL_LABELS[activity.nivel];
+  const optionEntries = (["A", "B", "C", "D"] as const).map((key) => [key, current.alternativas[key]] as const);
 
   return (
     <div className="page-container max-w-2xl">
+      {/* Header */}
       <div className="grid grid-cols-[1fr_auto] items-center gap-3 mb-6 sm:grid-cols-[1fr_auto_1fr]">
-        <button type="button" onClick={onBack} className="flex items-center gap-2 text-sm font-medium" style={{ color: "#6B4423" }}>
+        <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium" style={{ color: "#6B4423" }}>
           <IconChevronLeft /> Atividades
         </button>
         <h1 className="text-sm font-medium" style={{ color: "#6B4423" }}>
-          Trilha {levelLabel}
+          Trilha {level}
         </h1>
         <span className="col-span-2 text-right text-sm sm:col-span-1" style={{ color: "#6B4423" }}>
           {qIndex + 1} / {questions.length}
         </span>
       </div>
 
-      {isUsingCache && (
-        <p className="rounded-xl p-3 mb-5 text-sm" style={{ backgroundColor: "#fdf0e8", color: "#6B4423" }} role="status">
-          Modo offline: as questões foram carregadas do armazenamento deste dispositivo. A correção será realizada quando a conexão retornar.
-        </p>
-      )}
-
-      <div className="h-2 rounded-full mb-8 overflow-hidden" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Questões respondidas" aria-valuemin={0} aria-valuemax={questions.length} aria-valuenow={qIndex}>
-        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(qIndex / questions.length) * 100}%`, backgroundColor: "#A64D25" }} />
+      {/* Progress */}
+      <div className="h-2 rounded-full mb-8 overflow-hidden" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Progresso da atividade" aria-valuemin={1} aria-valuemax={questions.length} aria-valuenow={qIndex + 1}>
+        <div
+          className="h-full rounded-full transition-all duration-500"
+          style={{ width: `${((qIndex + 1) / questions.length) * 100}%`, backgroundColor: "#A64D25" }}
+        />
       </div>
 
-      <div className="rounded-2xl p-5 sm:p-8 mb-6" style={{ backgroundColor: "#E8D5C4", border: "1.5px solid #D4A574" }} aria-live="polite">
-        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#6B4423" }}>Questão {qIndex + 1}</p>
+      {/* Question */}
+      <div
+        className="rounded-2xl p-5 sm:p-8 mb-6"
+        style={{ backgroundColor: "#E8D5C4", border: "1.5px solid #D4A574" }}
+        aria-live="polite"
+      >
+        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#6B4423" }}>Questão</p>
         <h2 className="text-xl font-bold" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>
           {current.enunciado}
         </h2>
       </div>
 
+      {/* Options */}
       <fieldset className="space-y-3 mb-6">
         <legend className="sr-only">Escolha uma alternativa</legend>
-        {ANSWER_CHOICES.map((choice) => {
-          const isSelected = selected === choice;
+        {optionEntries.map(([key, option]) => {
+          let bg = "#E8D5C4";
+          let border = "#D4A574";
+          let color = "#3D2B1A";
+          if (confirmed && key === selected) { bg = "#eaf3e8"; border = "#4A6741"; color = "#365032"; }
+          else if (!confirmed && key === selected) { border = "#A64D25"; bg = "#F5E6D3"; }
+
           return (
             <label
-              key={choice}
+              key={key}
               className="answer-option flex cursor-pointer items-center gap-4 rounded-xl p-4 transition-all"
-              style={{
-                backgroundColor: isSelected ? "#F5E6D3" : "#E8D5C4",
-                border: `2px solid ${isSelected ? "#A64D25" : "#D4A574"}`,
-                color: "#3D2B1A",
-              }}
+              style={{ backgroundColor: bg, border: `2px solid ${border}`, color }}
             >
               <input
                 type="radio"
-                name={`answer-${current.id}`}
-                value={choice}
-                checked={isSelected}
-                onChange={() => setSelected(choice)}
-                disabled={isSaving}
+                name="answer"
+                value={key}
+                checked={selected === key}
+                onChange={() => { if (!confirmed) setSelected(key); }}
+                disabled={confirmed}
                 className="sr-only"
               />
-              <span
-                className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-                style={{ backgroundColor: isSelected ? "#A64D25" : "#D4A574", color: isSelected ? "white" : "#6B4423" }}
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 transition-all"
+                style={{
+                  backgroundColor: !confirmed && key === selected ? "#A64D25" : confirmed && key === selected ? "#4A6741" : "#D4A574",
+                  color: key === selected ? "white" : "#6B4423",
+                }}
               >
-                {choice}
-              </span>
-              <span className="font-medium">{current.alternativas[choice]}</span>
+                {confirmed && key === selected ? <IconCheck /> : key}
+              </div>
+              <span className="font-medium">{option}</span>
             </label>
           );
         })}
       </fieldset>
 
-      {loadError && (
-        <p className="rounded-xl p-3 mb-4 text-sm" style={{ backgroundColor: "#fee2e2", color: "#991b1b" }} role="alert">
-          {loadError}
-        </p>
+      {/* Feedback */}
+      {confirmed && (
+        <div
+          className="p-3 rounded-xl text-sm font-medium mb-4"
+          style={{ backgroundColor: "#eaf3e8", color: "#365032" }}
+          role="status"
+          aria-live="polite"
+        >
+          Resposta confirmada.
+        </div>
       )}
 
-      <button
-        type="button"
-        onClick={() => void handleNext()}
-        disabled={selected === null || isSaving}
-        className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
-        style={{ backgroundColor: selected === null || isSaving ? "#c47040" : "#A64D25", cursor: selected === null || isSaving ? "not-allowed" : "pointer" }}
-      >
-        {isSaving ? "Salvando tentativa…" : qIndex + 1 === questions.length ? "Finalizar atividade" : "Próxima questão →"}
-      </button>
+      {submitError && (
+        <div role="alert" className="mb-4 rounded-xl p-3 text-sm" style={{ backgroundColor: "#fef2f2", color: "#991b1b", border: "1px solid #fecaca" }}>
+          {submitError}
+        </div>
+      )}
+
+      <div className="flex gap-3">
+        {!confirmed ? (
+          <button
+            onClick={handleConfirm}
+            disabled={selected === null}
+            className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
+            style={{ backgroundColor: selected === null ? "#c47040" : "#A64D25", cursor: selected === null ? "not-allowed" : "pointer" }}
+          >
+            Confirmar
+          </button>
+        ) : (
+          <button
+            onClick={handleNext}
+            disabled={isSubmitting}
+            className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
+            style={{ backgroundColor: isSubmitting ? "#c47040" : "#A64D25" }}
+            aria-busy={isSubmitting}
+          >
+            {isSubmitting ? "Corrigindo…" : qIndex + 1 >= questions.length ? submitError ? "Tentar corrigir novamente" : "Finalizar atividade" : "Próxima questão →"}
+          </button>
+        )}
+      </div>
     </div>
   );
 };
@@ -1782,28 +2106,18 @@ const ResultScreen = ({
   correct,
   total,
   level,
-  pending,
   onRetry,
   onBack,
-  onSyncNow,
 }: {
   correct: number;
   total: number;
   level: Level;
-  pending: boolean;
   onRetry: () => void;
   onBack: () => void;
-  onSyncNow: () => void;
 }) => {
-  const pct = pending ? null : Math.round((correct / total) * 100);
-  const msg = pending
-    ? "Sua tentativa foi salva neste dispositivo. A correção e a pontuação estarão disponíveis quando a conexão retornar."
-    : pct !== null && pct >= 80
-      ? "Excelente! Parabéns pelo desempenho!"
-      : pct !== null && pct >= 60
-        ? "Bom trabalho! Continue praticando."
-        : "Continue tentando, você está evoluindo!";
-  const msgColor = pending ? "#6B4423" : pct !== null && pct >= 80 ? "#15803d" : pct !== null && pct >= 60 ? "#A64D25" : "#6B4423";
+  const pct = Math.round((correct / total) * 100);
+  const msg = pct >= 80 ? "Excelente! Parabéns pelo desempenho!" : pct >= 60 ? "Bom trabalho! Continue praticando." : "Continue tentando, você está evoluindo!";
+  const msgColor = pct >= 80 ? "#15803d" : pct >= 60 ? "#A64D25" : "#6B4423";
 
   return (
     <div className="page-container max-w-lg text-center">
@@ -1813,48 +2127,39 @@ const ResultScreen = ({
         </div>
 
         <h1 className="text-3xl font-bold mb-1" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>
-          {pending ? "Atividade enviada para correção" : "Resultado"}
+          Resultado
         </h1>
         <p className="text-sm mb-8" style={{ color: "#6B4423" }}>Trilha {level}</p>
 
-        {pending ? (
-          <div className="rounded-xl p-4 mb-6 text-sm" style={{ backgroundColor: "#fdf0e8", color: "#6B4423" }} role="status" aria-live="polite">
-            {msg}
-            {navigator.onLine && (
-              <button type="button" onClick={onSyncNow} className="block w-full mt-4 font-semibold underline">
-                Tentar sincronizar agora
-              </button>
-            )}
+        <div
+          className="text-6xl font-bold mb-2"
+          style={{ fontFamily: "Lora, serif", color: "#6B4423" }}
+          aria-label={`${correct} de ${total} acertos`}
+        >
+          {correct}<span className="text-3xl" style={{ color: "#6B4423" }}> / {total}</span>
+        </div>
+        <p className="text-lg font-semibold mb-6" style={{ color: "#A64D25" }}>{pct}% de acertos</p>
+
+        {/* Progress bar */}
+        <div className="h-3 rounded-full overflow-hidden mb-2" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Percentual de acertos" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#4A6741" : pct >= 60 ? "#A64D25" : "#8B6F47" }} />
+        </div>
+
+        <div className="flex flex-col justify-center gap-3 mb-6 text-sm sm:flex-row sm:gap-6">
+          <div className="flex items-center gap-2" style={{ color: "#15803d" }}>
+            <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center"><IconCheck /></div>
+            {correct} acertos
           </div>
-        ) : (
-          <>
-            <div className="text-6xl font-bold mb-2" style={{ fontFamily: "Lora, serif", color: "#6B4423" }} aria-label={`${correct} de ${total} acertos`}>
-              {correct}<span className="text-3xl" style={{ color: "#6B4423" }}> / {total}</span>
-            </div>
-            <p className="text-lg font-semibold mb-6" style={{ color: "#A64D25" }}>{pct}% de acertos</p>
+          <div className="flex items-center gap-2" style={{ color: "#dc2626" }}>
+            <div className="w-5 h-5 rounded-full bg-red-100 flex items-center justify-center"><IconX /></div>
+            {total - correct} erros
+          </div>
+        </div>
 
-            <div className="h-3 rounded-full overflow-hidden mb-2" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Percentual de acertos" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? 0}>
-              <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${pct}%`, backgroundColor: pct !== null && pct >= 80 ? "#4A6741" : pct !== null && pct >= 60 ? "#A64D25" : "#8B6F47" }} />
-            </div>
-
-            <div className="flex flex-col justify-center gap-3 mb-6 text-sm sm:flex-row sm:gap-6">
-              <div className="flex items-center gap-2" style={{ color: "#15803d" }}>
-                <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center"><IconCheck /></div>
-                {correct} acertos
-              </div>
-              <div className="flex items-center gap-2" style={{ color: "#dc2626" }}>
-                <div className="w-5 h-5 rounded-full bg-red-100 flex items-center justify-center"><IconX /></div>
-                {total - correct} erros
-              </div>
-            </div>
-          </>
-        )}
-
-        {!pending && <p className="text-sm font-medium mb-8" style={{ color: msgColor }}>{msg}</p>}
+        <p className="text-sm font-medium mb-8" style={{ color: msgColor }}>{msg}</p>
 
         <div className="space-y-3">
           <button
-            type="button"
             onClick={onRetry}
             className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all"
             style={{ backgroundColor: "#A64D25" }}
@@ -1862,7 +2167,6 @@ const ResultScreen = ({
             Refazer atividade
           </button>
           <button
-            type="button"
             onClick={onBack}
             className="w-full py-3 rounded-xl font-semibold text-sm transition-all"
             style={{ backgroundColor: "transparent", border: "1.5px solid #D4A574", color: "#6B4423" }}
@@ -1892,13 +2196,21 @@ export default function App() {
   const [selectedActivity, setSelectedActivity] = useState<LearningActivity | null>(null);
   const [activityKey, setActivityKey] = useState(0);
   const [result, setResult] = useState({ correct: 0, total: 0 });
-  const [resultPending, setResultPending] = useState(false);
-  const currentAttemptUuid = useRef<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [loginNotice, setLoginNotice] = useState("");
   const [appNotice, setAppNotice] = useState("");
   const [appError, setAppError] = useState("");
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncRequest, setSyncRequest] = useState(0);
+  const [offlinePreparation, setOfflinePreparation] = useState<{
+    state: "idle" | "preparing" | "ready" | "error" | "local-ready" | "local-incomplete";
+    message: string;
+  }>({ state: "idle", message: "" });
+  const synchronizationRef = useRef(false);
+  const preloadRef = useRef(false);
 
   const isAuthScreen = (value: Screen) => value === "login" || value === "register";
 
@@ -1927,30 +2239,136 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session?.user.id) return;
+    const prepareOfflineContent = async () => {
+      if (preloadRef.current) return;
+      preloadRef.current = true;
 
-    const syncWhenOnline = () => {
-      void synchronizePendingAttempts(session.user.id);
+      try {
+        if (isOnline) {
+          setOfflinePreparation({
+            state: "preparing",
+            message: "Preparando conteúdos para uso offline…",
+          });
+          await preloadOfflineContent();
+          setOfflinePreparation({
+            state: "ready",
+            message: "Conteúdos armazenados com sucesso.",
+          });
+        } else {
+          const summary = await inspectOfflineContent();
+          setOfflinePreparation(
+            summary.complete
+              ? {
+                  state: "local-ready",
+                  message: "Tanu-Tyura pronto para uso offline com os conteúdos armazenados neste dispositivo.",
+                }
+              : {
+                  state: "local-incomplete",
+                  message: "Alguns conteúdos ainda não estão disponíveis offline neste dispositivo.",
+                },
+          );
+        }
+      } catch (error) {
+        console.error("[Tanu-Tyura] Falha no pré-carregamento automático", error);
+        setOfflinePreparation({
+          state: "error",
+          message: "Não foi possível atualizar todos os conteúdos; os dados locais anteriores foram preservados.",
+        });
+      } finally {
+        preloadRef.current = false;
+      }
     };
 
-    void synchronizePendingAttempts(session.user.id);
-    window.addEventListener("online", syncWhenOnline);
-    return () => window.removeEventListener("online", syncWhenOnline);
-  }, [session?.user.id]);
+    prepareOfflineContent();
+  }, [isOnline]);
 
   useEffect(() => {
-    const handleAttemptSynced = (event: Event) => {
-      const detail = (event as CustomEvent<CorrectionResult>).detail;
-      if (!detail || detail.tentativa_uuid !== currentAttemptUuid.current) return;
-
-      setResult({ correct: detail.acertos, total: detail.total_questoes });
-      setResultPending(false);
-      setAppNotice("Atividade corrigida e resultado sincronizado com sucesso.");
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
-
-    window.addEventListener("tanu-tyura-attempt-synced", handleAttemptSynced);
-    return () => window.removeEventListener("tanu-tyura-attempt-synced", handleAttemptSynced);
   }, []);
+
+  const refreshPendingCount = useCallback(async () => {
+    if (!session?.user.id) {
+      setPendingCount(0);
+      return;
+    }
+
+    try {
+      setPendingCount(await countPendingAttempts(session.user.id));
+    } catch (error) {
+      console.error("[Tanu-Tyura] Falha ao contar tentativas pendentes", error);
+    }
+  }, [session?.user.id]);
+
+  const synchronizePendingAttempts = useCallback(async () => {
+    if (!isOnline || !session?.user.id || synchronizationRef.current) return;
+
+    synchronizationRef.current = true;
+    setIsSyncing(true);
+
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !sessionData.session || sessionData.session.user.id !== session.user.id) {
+        if (sessionError) logSupabaseError("Sessão inválida durante sincronização", sessionError);
+        setAppError("As tentativas continuam salvas. Entre novamente para sincronizá-las.");
+        return;
+      }
+
+      const pendingAttempts = await getPendingAttempts(session.user.id);
+      if (pendingAttempts.length === 0) return;
+
+      const synchronizedResults: Array<{ title: string; correct: number; total: number }> = [];
+      for (const attempt of pendingAttempts) {
+        const { result: synchronizedResult, error } = await correctStoredAttempt(attempt);
+
+        if (error) {
+          logSupabaseError(`Falha ao sincronizar tentativa ${attempt.tentativa_uuid}`, error);
+          await keepAttemptPending(attempt, error.message);
+          if (error.code === "42501" || error.code === "PGRST301") break;
+          continue;
+        }
+
+        await markAttemptSynced(attempt, synchronizedResult);
+        synchronizedResults.push({
+          title: attempt.atividade_titulo,
+          correct: synchronizedResult.acertos,
+          total: synchronizedResult.total_questoes,
+        });
+      }
+
+      await refreshPendingCount();
+      if (synchronizedResults.length === 1) {
+        const synchronizedResult = synchronizedResults[0];
+        setAppError("");
+        setAppNotice(`Sincronização concluída: ${synchronizedResult.correct} de ${synchronizedResult.total} acertos.`);
+      } else if (synchronizedResults.length > 1) {
+        setAppError("");
+        setAppNotice(`${synchronizedResults.length} tentativas sincronizadas com sucesso.`);
+      }
+    } catch (error) {
+      console.error("[Tanu-Tyura] Falha inesperada durante sincronização", error);
+      setAppError(
+        navigator.onLine
+          ? "Não foi possível sincronizar agora. As tentativas continuam salvas para uma nova tentativa."
+          : "",
+      );
+    } finally {
+      synchronizationRef.current = false;
+      setIsSyncing(false);
+      await refreshPendingCount();
+    }
+  }, [isOnline, refreshPendingCount, session?.user.id]);
+
+  useEffect(() => {
+    refreshPendingCount();
+    if (isOnline) synchronizePendingAttempts();
+  }, [isOnline, refreshPendingCount, session?.user.id, syncRequest, synchronizePendingAttempts]);
 
   const navigateTo = (s: Screen) => {
     setAppError("");
@@ -1959,6 +2377,10 @@ export default function App() {
   };
 
   const handleLogin = async (email: string, password: string): Promise<AuthActionResult> => {
+    if (!navigator.onLine) {
+      return { error: "O login requer conexão com a internet. Reconecte-se e tente novamente." };
+    }
+
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) return { error: getAuthErrorMessage(error) };
@@ -1976,6 +2398,10 @@ export default function App() {
   };
 
   const handleRegister = async (name: string, email: string, password: string): Promise<AuthActionResult> => {
+    if (!navigator.onLine) {
+      return { error: "O cadastro requer conexão com a internet. Reconecte-se e tente novamente." };
+    }
+
     try {
       const { data, error } = await supabase.auth.signUp({
         email,
@@ -1994,7 +2420,7 @@ export default function App() {
 
       setSession(data.session);
       setAppError("");
-      setAppNotice("Conta criada e login realizado com sucesso.");
+      setAppNotice("Conta criada e login realizado.");
       setScreen("home");
       return {};
     } catch (error) {
@@ -2010,6 +2436,7 @@ export default function App() {
       return;
     }
     setSession(null);
+    setPendingCount(0);
     setAppNotice("");
     setLoginNotice("Sessão encerrada com sucesso.");
     setScreen("login");
@@ -2031,33 +2458,27 @@ export default function App() {
 
   const handleSelectActivity = (activity: LearningActivity) => {
     setSelectedActivity(activity);
-    setActivityKey((key) => key + 1);
-    setResultPending(false);
-    currentAttemptUuid.current = null;
+    setActivityKey((k) => k + 1);
     setScreen("question");
   };
 
-  const handleFinish = (attemptId: string) => {
-    currentAttemptUuid.current = attemptId;
-    setResult({ correct: 0, total: 0 });
-    setResultPending(true);
+  const handleFinish = (correct: number, total: number) => {
+    setResult({ correct, total });
     setScreen("result");
-
-    if (session?.user.id && navigator.onLine) {
-      void synchronizePendingAttempts(session.user.id);
-    }
   };
 
   const handleRetry = () => {
-    setActivityKey((key) => key + 1);
-    setResultPending(false);
-    currentAttemptUuid.current = null;
+    setActivityKey((k) => k + 1);
     setScreen("question");
   };
 
-  const handleSyncNow = () => {
-    if (session?.user.id) void synchronizePendingAttempts(session.user.id);
+  const handleOfflineQueued = () => {
+    setAppError("");
+    setAppNotice("Tentativa salva. Aguardando sincronização.");
+    setScreen("activities");
   };
+
+  const clearAppNotice = useCallback(() => setAppNotice(""), []);
 
   if (!authReady) {
     return <AuthLoadingScreen />;
@@ -2072,7 +2493,19 @@ export default function App() {
   }
 
   return (
-    <AppLayout activeScreen={screen} onNavigate={navigateTo} onLogout={handleLogout} notice={appNotice} error={appError}>
+    <AppLayout
+      activeScreen={screen}
+      onNavigate={navigateTo}
+      onLogout={handleLogout}
+      isOnline={isOnline}
+      pendingCount={pendingCount}
+      isSyncing={isSyncing}
+      onSync={() => setSyncRequest((request) => request + 1)}
+      offlinePreparation={offlinePreparation}
+      notice={appNotice}
+      onDismissNotice={clearAppNotice}
+      error={appError}
+    >
       {screen === "home" && <HomeScreen onNavigate={navigateTo} />}
       {screen === "dictionary" && <DictionaryScreen />}
       {screen === "modules" && <ModulesScreen onSelectModule={handleSelectModule} />}
@@ -2080,24 +2513,24 @@ export default function App() {
         <ModuleContentScreen module={selectedModule} onBack={() => setScreen("modules")} />
       )}
       {screen === "activities" && <ActivitiesScreen onSelectActivity={handleSelectActivity} />}
-      {screen === "question" && selectedActivity && session && (
+      {screen === "question" && selectedActivity && (
         <QuestionScreen
           key={activityKey}
           activity={selectedActivity}
           userId={session.user.id}
           onFinish={handleFinish}
+          onQueued={handleOfflineQueued}
+          onPendingChange={refreshPendingCount}
           onBack={() => setScreen("activities")}
         />
       )}
-      {screen === "result" && selectedActivity && (
+      {screen === "result" && (
         <ResultScreen
           correct={result.correct}
           total={result.total}
-          level={LEVEL_LABELS[selectedActivity.nivel]}
-          pending={resultPending}
+          level={selectedActivity ? levelDetails[selectedActivity.nivel].label : "Fácil"}
           onRetry={handleRetry}
           onBack={() => setScreen("activities")}
-          onSyncNow={handleSyncNow}
         />
       )}
     </AppLayout>
