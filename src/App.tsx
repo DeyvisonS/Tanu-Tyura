@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { createContext, useState, useEffect, useRef, useCallback, useContext } from "react";
 import type { AuthError, Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import { correctStoredAttempt } from "./lib/activitySync";
@@ -84,6 +84,38 @@ type LearningWord = {
 };
 
 type DictionaryWord = Pick<LearningWord, "id" | "termo_kambeba" | "traducao_portugues">;
+
+type SuccessNotification = {
+  id: number;
+  message: string;
+};
+
+const SuccessNotificationContext = createContext<{
+  currentSuccess?: SuccessNotification;
+  enqueueSuccess: (message: string) => void;
+}>({
+  enqueueSuccess: () => undefined,
+});
+
+const useSuccessNotification = () => useContext(SuccessNotificationContext);
+
+const DesktopSuccessNotification = ({ className = "" }: { className?: string }) => {
+  const { currentSuccess } = useSuccessNotification();
+
+  if (!currentSuccess) return null;
+
+  return (
+    <div
+      key={currentSuccess.id}
+      role="status"
+      aria-live="polite"
+      className={`hidden h-[46px] w-full items-center rounded-xl border p-3 text-sm lg:flex ${className}`}
+      style={{ backgroundColor: "#ecfdf5", color: "#166534", borderColor: "#86efac" }}
+    >
+      <p>{currentSuccess.message}</p>
+    </div>
+  );
+};
 
 const getValidAudioUrl = (value: string | null) => {
   if (!value?.trim()) return null;
@@ -438,7 +470,7 @@ const AppLayout = ({
   const drawerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const toastIdRef = useRef(0);
-  const [successQueue, setSuccessQueue] = useState<Array<{ id: number; message: string }>>([]);
+  const [successQueue, setSuccessQueue] = useState<SuccessNotification[]>([]);
 
   const closeMenu = () => {
     setMenuOpen(false);
@@ -480,6 +512,12 @@ const AppLayout = ({
   }, [enqueueSuccess, offlinePreparation.message, offlinePreparation.state]);
 
   const currentSuccess = successQueue[0];
+  const hasPersistentNotice = offlinePreparation.state === "preparing"
+    || offlinePreparation.state === "error"
+    || offlinePreparation.state === "local-incomplete"
+    || !isOnline
+    || pendingCount > 0
+    || Boolean(error);
 
   useEffect(() => {
     if (!currentSuccess) return;
@@ -510,6 +548,7 @@ const AppLayout = ({
   }, [menuOpen]);
 
   return (
+    <SuccessNotificationContext.Provider value={{ currentSuccess, enqueueSuccess }}>
     <div className="min-h-screen lg:flex" style={{ backgroundColor: "#F5E6D3" }}>
       <a href="#main-content" className="skip-link">Pular para o conteúdo principal</a>
       <header className="sticky top-0 z-30 flex min-h-16 items-center justify-between border-b px-4 lg:hidden" style={{ backgroundColor: "#6B4423", borderColor: "#8B6F47" }}>
@@ -550,19 +589,27 @@ const AppLayout = ({
         />
       </div>
 
-      <main id="main-content" ref={mainRef} className="min-w-0 flex-1 overflow-y-auto" tabIndex={-1}>
+      <main id="main-content" ref={mainRef} className="relative min-w-0 flex-1 overflow-y-auto lg:flex lg:min-h-screen lg:flex-col" tabIndex={-1}>
         {currentSuccess && (
           <div
             key={currentSuccess.id}
             role="status"
             aria-live="polite"
-            className="mx-4 mt-4 flex min-h-10 items-center rounded-2xl border px-4 py-2 text-sm sm:mx-8"
+            className="mx-4 mt-4 flex min-h-10 items-center rounded-2xl border px-4 py-2 text-sm sm:mx-8 lg:hidden"
             style={{ backgroundColor: "#dcfce7", color: "#166534", borderColor: "#86efac" }}
           >
             <p className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">
               {currentSuccess.message}
             </p>
           </div>
+        )}
+        {currentSuccess && (
+          <div className="pointer-events-none absolute inset-x-0 top-4 z-20 mx-auto hidden w-full max-w-[44rem] lg:block">
+            <DesktopSuccessNotification />
+          </div>
+        )}
+        {currentSuccess && hasPersistentNotice && (
+          <div className="hidden h-[62px] shrink-0 lg:block" aria-hidden="true" />
         )}
         {(offlinePreparation.state === "preparing"
           || offlinePreparation.state === "error"
@@ -635,6 +682,7 @@ const AppLayout = ({
         {children}
       </main>
     </div>
+    </SuccessNotificationContext.Provider>
   );
 };
 
@@ -949,7 +997,7 @@ const HomeScreen = ({ onNavigate }: { onNavigate: (s: Screen) => void }) => {
   ];
 
   return (
-    <div className="page-container max-w-4xl">
+    <div className="page-container max-w-4xl lg:my-auto lg:-translate-y-4 lg:max-w-5xl">
       {/* Greeting */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-1" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>
@@ -1253,7 +1301,7 @@ const ModulesScreen = ({ onSelectModule }: { onSelectModule: (module: LearningMo
   }, [requestKey]);
 
   return (
-    <div className="page-container max-w-4xl">
+    <div className="page-container max-w-4xl lg:my-auto lg:-translate-y-4 lg:max-w-5xl">
       <h1 className="text-3xl font-bold mb-1" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>Módulos de Estudo</h1>
       <p className="text-sm mb-8" style={{ color: "#6B4423" }}>Escolha uma categoria para começar a aprender</p>
 
@@ -1701,14 +1749,14 @@ const ActivitiesScreen = ({ onSelectActivity }: { onSelectActivity: (activity: L
   }, [requestKey]);
 
   return (
-    <div className="page-container max-w-2xl">
+    <div className="page-container max-w-2xl lg:my-auto lg:-translate-y-4 lg:max-w-3xl">
       <h1 className="text-3xl font-bold mb-1" style={{ fontFamily: "Lora, serif", color: "#6B4423" }}>Atividades</h1>
       <p className="text-sm mb-8" style={{ color: "#6B4423" }}>Escolha seu nível e comece a praticar</p>
 
       {!isLoading && preparationMessage && (
         <div
           role={preparationFailed ? "alert" : "status"}
-          className="mb-5 rounded-xl p-3 text-sm"
+          className={`mb-5 rounded-xl p-3 text-sm ${preparationFailed ? "" : "lg:hidden"}`}
           style={{
             backgroundColor: preparationFailed ? "#fff7ed" : "#ecfdf5",
             border: `1px solid ${preparationFailed ? "#fdba74" : "#86efac"}`,
@@ -1952,7 +2000,7 @@ const QuestionScreen = ({
 
   if (isLoading) {
     return (
-      <div className="page-container max-w-2xl">
+      <div className="page-container max-w-2xl lg:my-auto lg:-translate-y-4 lg:max-w-3xl">
         <div role="status" className="rounded-2xl p-8 text-center text-sm" style={{ backgroundColor: "#E8D5C4", color: "#6B4423", border: "1.5px solid #D4A574" }}>
           Carregando questões…
         </div>
@@ -1962,7 +2010,7 @@ const QuestionScreen = ({
 
   if (loadError || !current) {
     return (
-      <div className="page-container max-w-2xl">
+      <div className="page-container max-w-2xl lg:my-auto lg:-translate-y-4 lg:max-w-3xl">
         <div role="alert" className="rounded-2xl p-6 text-center" style={{ backgroundColor: "#fef2f2", color: "#991b1b", border: "1px solid #fecaca" }}>
           <p className="mb-4 text-sm">{loadError || "Não foi possível abrir esta atividade."}</p>
           <div className="flex flex-col justify-center gap-3 sm:flex-row">
@@ -1981,7 +2029,7 @@ const QuestionScreen = ({
   const optionEntries = (["A", "B", "C", "D"] as const).map((key) => [key, current.alternativas[key]] as const);
 
   return (
-    <div className="page-container max-w-2xl">
+    <div className="page-container max-w-2xl lg:my-auto lg:-translate-y-4 lg:max-w-3xl">
       {/* Header */}
       <div className="grid grid-cols-[1fr_auto] items-center gap-3 mb-6 sm:grid-cols-[1fr_auto_1fr]">
         <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium" style={{ color: "#6B4423" }}>
@@ -2251,7 +2299,7 @@ export default function App() {
           await preloadOfflineContent();
           setOfflinePreparation({
             state: "ready",
-            message: "Conteúdos armazenados com sucesso.",
+            message: "Uso offline disponível.",
           });
         } else {
           const summary = await inspectOfflineContent();
