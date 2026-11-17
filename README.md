@@ -36,7 +36,7 @@ As telas abaixo apresentam as principais áreas e recursos da plataforma.
   </tr>
   <tr>
     <td align="center"><strong>5. Atividades</strong><br><img src="docs/images/05-atividades.webp" alt="Seleção dos níveis de atividade" width="220"></td>
-    <td align="center"><strong>6. Questão</strong><br><img src="docs/images/06-questao.webp" alt="Questão de múltipla escolha de uma atividade" width="220"></td>
+    <td align="center"><strong>6. Questão</strong><br><img src="https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/2889b452fede8e6867ebbde8e7b66d6342604660/docs/images/06-questao.webp" alt="Questão de múltipla escolha de uma atividade" width="260"></td>
   </tr>
   <tr>
     <td align="center"><strong>7. Resultado</strong><br><img src="docs/images/07-resultado.webp" alt="Tela de resultado da atividade" width="220"></td>
