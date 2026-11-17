@@ -21,28 +21,37 @@ A proposta busca contribuir para a valorização e a aprendizagem da língua, re
 - Armazenamento local dos conteúdos públicos e de tentativas realizadas sem conexão.
 - Sincronização de tentativas pendentes quando a conexão e uma sessão válida estiverem disponíveis.
 
-## Capturas de tela
+## Imagens
 
-As telas abaixo apresentam as principais áreas e recursos da plataforma.
+As imagens a seguir apresentam as principais telas da plataforma.
 
-<table>
-  <tr>
-    <td align="center"><strong>1. Página inicial</strong><br><img src="docs/images/01-pagina-inicial.webp" alt="Página inicial do Tanu-Tyura" width="220"></td>
-    <td align="center"><strong>2. Módulos de estudo</strong><br><img src="https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/fc40cb6a2ff91caeca5aaef03bb666f5ae257e8c/docs/images/02-modulos.webp" alt="Categorias dos módulos de estudo" width="220"></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>3. Conteúdo de um módulo</strong><br><img src="docs/images/03-conteudo-modulo.webp" alt="Apresentação de uma palavra em um módulo de aprendizagem" width="220"></td>
-    <td align="center"><strong>4. Dicionário</strong><br><img src="docs/images/04-dicionario.webp" alt="Dicionário Kambeba–Português" width="220"></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>5. Atividades</strong><br><img src="docs/images/05-atividades.webp" alt="Seleção dos níveis de atividade" width="220"></td>
-    <td align="center"><strong>6. Questão</strong><br><img src="https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/3e7759fdc7a909b051dd9da2507b9f3ee8e4707c/docs/images/06-questao.webp" alt="Questão de múltipla escolha de uma atividade" width="260"></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>7. Resultado</strong><br><img src="docs/images/07-resultado.webp" alt="Tela de resultado da atividade" width="220"></td>
-    <td></td>
-  </tr>
-</table>
+### 1. Página inicial
+
+![Página inicial do Tanu-Tyura](https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/d09cfd482e849b6eaddc3383390b19506c734b02/docs/images/01-pagina-inicial.webp)
+
+### 2. Módulos de estudo
+
+![Módulos de estudo do Tanu-Tyura](https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/fc40cb6a2ff91caeca5aaef03bb666f5ae257e8c/docs/images/02-modulos.webp)
+
+### 3. Conteúdo de um módulo
+
+![Conteúdo de um módulo de aprendizagem](docs/images/03-conteudo-modulo.webp)
+
+### 4. Dicionário
+
+![Dicionário Kambeba–Português](docs/images/04-dicionario.webp)
+
+### 5. Atividades
+
+![Seleção dos níveis de atividade](docs/images/05-atividades.webp)
+
+### 6. Questão
+
+![Questão de múltipla escolha de uma atividade](https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/3e7759fdc7a909b051dd9da2507b9f3ee8e4707c/docs/images/06-questao.webp)
+
+### 7. Resultado
+
+![Resultado de uma atividade](docs/images/07-resultado.webp)
 
 ## Conteúdo de aprendizagem
 
