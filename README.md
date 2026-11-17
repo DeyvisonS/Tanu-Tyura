@@ -28,7 +28,7 @@ As telas abaixo apresentam as principais áreas e recursos da plataforma.
 <table>
   <tr>
     <td align="center"><strong>1. Página inicial</strong><br><img src="docs/images/01-pagina-inicial.webp" alt="Página inicial do Tanu-Tyura" width="220"></td>
-    <td align="center"><strong>2. Módulos de estudo</strong><br><img src="docs/images/02-modulos.webp" alt="Categorias dos módulos de estudo" width="220"></td>
+    <td align="center"><strong>2. Módulos de estudo</strong><br><img src="https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/e3ba41f9619e78789388ce87bcd349830d660c60/docs/images/02-modulos.webp" alt="Categorias dos módulos de estudo" width="220"></td>
   </tr>
   <tr>
     <td align="center"><strong>3. Conteúdo de um módulo</strong><br><img src="docs/images/03-conteudo-modulo.webp" alt="Apresentação de uma palavra em um módulo de aprendizagem" width="220"></td>
