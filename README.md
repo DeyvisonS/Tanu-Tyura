@@ -27,7 +27,7 @@ As imagens a seguir apresentam as principais telas da plataforma.
 
 ### 1. Página inicial
 
-![Página inicial do Tanu-Tyura](docs/images/01-pagina-inicial.png)
+![Página inicial do Tanu-Tyura](docs/images/01-pagina-inicial.png.png)
 
 ### 2. Módulos de estudo
 
