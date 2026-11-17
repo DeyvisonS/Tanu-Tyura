@@ -27,7 +27,7 @@ As imagens a seguir apresentam as principais telas da plataforma.
 
 ### 1. Página inicial
 
-![Página inicial do Tanu-Tyura](https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/d09cfd482e849b6eaddc3383390b19506c734b02/docs/images/01-pagina-inicial.webp)
+![Página inicial do Tanu-Tyura](docs/images/01-pagina-inicial.png)
 
 ### 2. Módulos de estudo
 
