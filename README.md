@@ -31,7 +31,7 @@ As imagens a seguir apresentam as principais telas da plataforma.
 
 ### 2. Módulos de estudo
 
-![Módulos de estudo do Tanu-Tyura](https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/fc40cb6a2ff91caeca5aaef03bb666f5ae257e8c/docs/images/02-modulos.png)
+![Módulos de estudo do Tanu-Tyura](docs/images/02-modulos.png)
 
 ### 3. Conteúdo de um módulo
 
@@ -47,7 +47,7 @@ As imagens a seguir apresentam as principais telas da plataforma.
 
 ### 6. Questão
 
-![Questão de múltipla escolha de uma atividade](https://raw.githubusercontent.com/DeyvisonS/Tanu-Tyura/3e7759fdc7a909b051dd9da2507b9f3ee8e4707c/docs/images/06-questao.png)
+![Questão de múltipla escolha de uma atividade](docs/images/06-questao.png)
 
 ### 7. Resultado
 
