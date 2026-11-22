@@ -27,7 +27,7 @@ As imagens a seguir apresentam as principais telas da plataforma.
 
 ### 1. Página inicial
 
-![Página inicial do Tanu-Tyura](docs/images/01-pagina-inicial.png.png)
+![Página inicial do Tanu-Tyura](docs/images/01-pagina-inicial.png.)
 
 ### 2. Módulos de estudo
 
@@ -35,15 +35,15 @@ As imagens a seguir apresentam as principais telas da plataforma.
 
 ### 3. Conteúdo de um módulo
 
-![Conteúdo de um módulo de aprendizagem](docs/images/03-conteudo-modulo.webp)
+![Conteúdo de um módulo de aprendizagem](docs/images/03-conteudo-modulo.png)
 
 ### 4. Dicionário
 
-![Dicionário Kambeba–Português](docs/images/04-dicionario.webp)
+![Dicionário Kambeba–Português](docs/images/04-dicionario.png)
 
 ### 5. Atividades
 
-![Seleção dos níveis de atividade](docs/images/05-atividades.webp)
+![Seleção dos níveis de atividade](docs/images/05-atividades.png)
 
 ### 6. Questão
 
@@ -51,7 +51,7 @@ As imagens a seguir apresentam as principais telas da plataforma.
 
 ### 7. Resultado
 
-![Resultado de uma atividade](docs/images/07-resultado.webp)
+![Resultado de uma atividade](docs/images/07-resultado.png)
 
 ## Conteúdo de aprendizagem
 
