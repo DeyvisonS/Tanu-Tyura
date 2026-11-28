@@ -13,6 +13,17 @@ export type OfflineContentSummary = {
   complete: boolean;
 };
 
+export const hasCompleteLearningCatalog = (
+  modules: CachedModule[],
+  words: CachedWord[],
+) => {
+  const moduleIds = new Set(modules.map((module) => module.id));
+  return modules.length === EXPECTED_ACTIVE_MODULES
+    && words.length === EXPECTED_ACTIVE_WORDS
+    && words.every((word) => moduleIds.has(word.modulo_id))
+    && modules.every((module) => words.some((word) => word.modulo_id === module.id));
+};
+
 const hasFourOptions = (question: CachedQuestion) =>
   ["A", "B", "C", "D"].every(
     (option) => typeof question.alternativas?.[option as keyof CachedQuestion["alternativas"]] === "string",
