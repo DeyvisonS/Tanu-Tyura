@@ -347,34 +347,29 @@ export const mergeSyncedWordViews = async (
 
 
 /** Atomically refreshes all public learning content without touching pending attempts or word views. */
-export const replaceAllOfflineContent = (
+export const replaceAllOfflineContent = async (
   modules: CachedModule[],
   words: CachedWord[],
   activities: CachedActivity[],
   questions: CachedQuestion[],
-) =>
-  new Promise<void>(async (resolve, reject) => {
-    let database: IDBDatabase | undefined;
-    try {
-      database = await openDatabase();
-      const transaction = database.transaction(
-        ["modules", "words", "activities", "questions"],
-        "readwrite",
-      );
-      const completed = transactionToPromise(transaction);
-      const replace = <T,>(store: IDBObjectStore, records: T[]) => {
-        store.clear();
-        records.forEach((record) => store.put(record));
-      };
-      replace(transaction.objectStore("modules"), modules);
-      replace(transaction.objectStore("words"), words);
-      replace(transaction.objectStore("activities"), activities);
-      replace(transaction.objectStore("questions"), questions);
-      await completed;
-      resolve();
-    } catch (error) {
-      reject(error);
-    } finally {
-      database?.close();
-    }
-  });
+) => {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(
+      ["modules", "words", "activities", "questions"],
+      "readwrite",
+    );
+    const completed = transactionToPromise(transaction);
+    const replace = <T,>(store: IDBObjectStore, records: T[]) => {
+      store.clear();
+      records.forEach((record) => store.put(record));
+    };
+    replace(transaction.objectStore("modules"), modules);
+    replace(transaction.objectStore("words"), words);
+    replace(transaction.objectStore("activities"), activities);
+    replace(transaction.objectStore("questions"), questions);
+    await completed;
+  } finally {
+    database.close();
+  }
+};
