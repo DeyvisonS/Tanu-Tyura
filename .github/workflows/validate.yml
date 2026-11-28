@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "feature/atividades-supabase-offline"
+      - "feature/progresso-modulos"
   pull_request:
     branches:
       - main
