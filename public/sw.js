@@ -1,4 +1,4 @@
-const CACHE_NAME = "tanu-tyura-shell-v4";
+const CACHE_NAME = "tanu-tyura-shell-v5";
 const APP_ROOT = new URL("./", self.registration.scope).toString();
 const PUBLIC_ASSET_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
 
@@ -67,9 +67,17 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then(async (response) => {
+          const cache = await caches.open(CACHE_NAME);
           if (response.ok) {
-            const cache = await caches.open(CACHE_NAME);
+            // Every SPA route resolves to the same application shell.
             await cache.put(APP_ROOT, response.clone());
+            return response;
+          }
+
+          // Static hosts may return 404 for client-side routes instead of
+          // applying the SPA fallback. Reuse the previously cached shell.
+          if (response.status === 404) {
+            return (await cache.match(APP_ROOT)) || response;
           }
           return response;
         })
