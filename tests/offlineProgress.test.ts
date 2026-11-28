@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { summarizeOfflineContent } from "../src/lib/offlineContentRules.ts";
+import { hasCompleteLearningCatalog, summarizeOfflineContent } from "../src/lib/offlineContentRules.ts";
 import { calculateModuleProgress } from "../src/lib/moduleProgress.ts";
 
 const modules = Array.from({ length: 5 }, (_, index) => ({
@@ -10,13 +10,20 @@ const modules = Array.from({ length: 5 }, (_, index) => ({
   ordem: index + 1,
 }));
 
-const words = Array.from({ length: 43 }, (_, index) => ({
-  id: index + 1,
-  modulo_id: Math.floor(index / 9) + 1,
-  termo_kambeba: `palavra-${index + 1}`,
-  traducao_portugues: `tradução-${index + 1}`,
-  audio_url: null,
-}));
+const words = [9, 10, 8, 8, 8].flatMap((count, moduleIndex) =>
+  Array.from({ length: count }, (_, wordIndex) => {
+    const id = [9, 10, 8, 8, 8]
+      .slice(0, moduleIndex)
+      .reduce((total, previous) => total + previous, 0) + wordIndex + 1;
+    return {
+      id,
+      modulo_id: moduleIndex + 1,
+      termo_kambeba: `palavra-${id}`,
+      traducao_portugues: `tradução-${id}`,
+      audio_url: null,
+    };
+  }),
+);
 
 const activities = ["facil", "medio", "avancado"].map((nivel, index) => ({
   id: index + 1,
@@ -34,6 +41,12 @@ const questions = activities.flatMap((activity) =>
     ordem: index + 1,
   })),
 );
+
+test("reconhece apenas o catálogo completo de cinco módulos e 43 palavras", () => {
+  assert.equal(hasCompleteLearningCatalog(modules, words), true);
+  assert.equal(hasCompleteLearningCatalog(modules.slice(0, 4), words), false);
+  assert.equal(hasCompleteLearningCatalog(modules, words.slice(0, 42)), false);
+});
 
 test("aceita o conjunto pedagógico completo validado", () => {
   const summary = summarizeOfflineContent(modules, words, activities, questions);
