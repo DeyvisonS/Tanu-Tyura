@@ -67,7 +67,7 @@ export const syncWordProgress = async (userId: string): Promise<ProgressSyncResu
 
   await mergeSyncedWordViews(
     userId,
-    (data ?? []).map((wordView) => ({
+    (data ?? []).map((wordView: { palavra_id: number | string; visualizada_em: string }) => ({
       palavra_id: Number(wordView.palavra_id),
       visualizada_em: wordView.visualizada_em,
     })),
