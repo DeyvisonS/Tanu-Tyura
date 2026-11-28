@@ -24,6 +24,7 @@ import type { OfflineAttempt } from "./lib/offline";
 import { calculateModuleProgress } from "./lib/moduleProgress";
 import { recordWordView, syncWordProgress } from "./lib/wordProgress";
 import { isOfflineShellReady } from "./lib/offlineRuntime";
+import { EXPECTED_ACTIVE_MODULES, EXPECTED_ACTIVE_WORDS } from "./lib/offlineContentRules";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1019,10 +1020,21 @@ const HomeScreen = ({ userId, onNavigate }: { userId: string; onNavigate: (s: Sc
             supabase.from("palavras").select("id, modulo_id, termo_kambeba, traducao_portugues, audio_url").eq("ativo", true).order("id", { ascending: true }),
           ]);
           if (!moduleResponse.error && !wordResponse.error) {
-            modules = moduleResponse.data ?? [];
-            words = wordResponse.data ?? [];
-            fresh = true;
-            await replaceCachedLearningContent(modules, words);
+            const remoteModules = moduleResponse.data ?? [];
+            const remoteWords = wordResponse.data ?? [];
+            const moduleIds = new Set(remoteModules.map((module) => module.id));
+            const catalogIsComplete =
+              remoteModules.length === EXPECTED_ACTIVE_MODULES
+              && remoteWords.length === EXPECTED_ACTIVE_WORDS
+              && remoteWords.every((word) => moduleIds.has(word.modulo_id))
+              && remoteModules.every((module) => remoteWords.some((word) => word.modulo_id === module.id));
+
+            if (catalogIsComplete) {
+              modules = remoteModules;
+              words = remoteWords;
+              fresh = true;
+              await replaceCachedLearningContent(modules, words);
+            }
           }
         }
         if (!fresh) [modules, words] = await Promise.all([getCachedModules(), getCachedWords()]);
