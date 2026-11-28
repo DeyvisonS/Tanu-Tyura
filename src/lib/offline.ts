@@ -79,6 +79,7 @@ const transactionToPromise = (transaction: IDBTransaction) =>
 const openDatabase = () =>
   new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    let wasBlocked = false;
 
     request.onupgradeneeded = () => {
       const database = request.result;
@@ -110,9 +111,20 @@ const openDatabase = () =>
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => database.close();
+      if (wasBlocked) {
+        database.close();
+        return;
+      }
+      resolve(database);
+    };
     request.onerror = () => reject(request.error ?? new Error("Não foi possível abrir o armazenamento offline."));
-    request.onblocked = () => reject(new Error("A atualização do armazenamento offline está bloqueada."));
+    request.onblocked = () => {
+      wasBlocked = true;
+      reject(new Error("A atualização do armazenamento offline está bloqueada. Feche outras abas do Tanu-Tyura e tente novamente."));
+    };
   });
 
 export const cacheActivities = async (activities: CachedActivity[]) => {
