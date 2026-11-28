@@ -35,5 +35,8 @@ jobs:
       - name: Verificar tipos TypeScript
         run: pnpm exec tsc --noEmit
 
+      - name: Executar testes de progresso offline
+        run: node --experimental-strip-types --test tests/*.test.ts
+
       - name: Gerar build de produção
         run: pnpm build
