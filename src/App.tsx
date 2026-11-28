@@ -24,7 +24,7 @@ import type { OfflineAttempt } from "./lib/offline";
 import { calculateModuleProgress } from "./lib/moduleProgress";
 import { recordWordView, syncWordProgress } from "./lib/wordProgress";
 import { isOfflineShellReady } from "./lib/offlineRuntime";
-import { EXPECTED_ACTIVE_MODULES, EXPECTED_ACTIVE_WORDS } from "./lib/offlineContentRules";
+import { hasCompleteLearningCatalog } from "./lib/offlineContentRules";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1022,12 +1022,7 @@ const HomeScreen = ({ userId, onNavigate }: { userId: string; onNavigate: (s: Sc
           if (!moduleResponse.error && !wordResponse.error) {
             const remoteModules = moduleResponse.data ?? [];
             const remoteWords = wordResponse.data ?? [];
-            const moduleIds = new Set(remoteModules.map((module) => module.id));
-            const catalogIsComplete =
-              remoteModules.length === EXPECTED_ACTIVE_MODULES
-              && remoteWords.length === EXPECTED_ACTIVE_WORDS
-              && remoteWords.every((word) => moduleIds.has(word.modulo_id))
-              && remoteModules.every((module) => remoteWords.some((word) => word.modulo_id === module.id));
+            const catalogIsComplete = hasCompleteLearningCatalog(remoteModules, remoteWords);
 
             if (catalogIsComplete) {
               modules = remoteModules;
