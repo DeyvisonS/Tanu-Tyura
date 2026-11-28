@@ -13,12 +13,16 @@ import {
   getCachedModules,
   getCachedQuestions,
   getCachedWords,
+  getViewedWordIds,
+  replaceCachedLearningContent,
   getPendingAttempts,
   keepAttemptPending,
   markAttemptSynced,
   savePendingAttempt,
 } from "./lib/offline";
 import type { OfflineAttempt } from "./lib/offline";
+import { calculateModuleProgress } from "./lib/moduleProgress";
+import { recordWordView, syncWordProgress } from "./lib/wordProgress";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -989,12 +993,48 @@ const RegisterScreen = ({
 
 // ─── Screen: Home ─────────────────────────────────────────────────────────────
 
-const HomeScreen = ({ onNavigate }: { onNavigate: (s: Screen) => void }) => {
+const HomeScreen = ({ userId, onNavigate }: { userId: string; onNavigate: (s: Screen) => void }) => {
+  const [moduleProgress, setModuleProgress] = useState({ completed: 0, total: 0 });
   const cards = [
     { screen: "modules" as Screen, title: "Módulos", subtitle: "Estude por categorias", icon: <IconBook />, color: "#6B4423" },
     { screen: "dictionary" as Screen, title: "Dicionário", subtitle: "Pesquise palavras", icon: <IconSearch />, color: "#A64D25" },
     { screen: "activities" as Screen, title: "Atividades", subtitle: "Pratique e teste seus conhecimentos", icon: <IconActivity />, color: "#4A6741" },
   ];
+
+  useEffect(() => {
+    let active = true;
+    const loadProgress = async () => {
+      try {
+        if (navigator.onLine) {
+          const syncResult = await syncWordProgress(userId);
+          if (syncResult.error) console.error("[Tanu-Tyura] Não foi possível sincronizar o progresso dos módulos", syncResult.error);
+        }
+        let modules: LearningModule[] = [];
+        let words: LearningWord[] = [];
+        let fresh = false;
+        if (navigator.onLine) {
+          const [moduleResponse, wordResponse] = await Promise.all([
+            supabase.from("modulos").select("id, nome, descricao, ordem").eq("ativo", true).order("ordem", { ascending: true }),
+            supabase.from("palavras").select("id, modulo_id, termo_kambeba, traducao_portugues, audio_url").eq("ativo", true).order("id", { ascending: true }),
+          ]);
+          if (!moduleResponse.error && !wordResponse.error) {
+            modules = moduleResponse.data ?? [];
+            words = wordResponse.data ?? [];
+            fresh = true;
+            await replaceCachedLearningContent(modules, words);
+          }
+        }
+        if (!fresh) [modules, words] = await Promise.all([getCachedModules(), getCachedWords()]);
+        const viewedWordIds = await getViewedWordIds(userId);
+        const progress = calculateModuleProgress(modules, words, viewedWordIds);
+        if (active) setModuleProgress(progress);
+      } catch (error) {
+        console.error("[Tanu-Tyura] Falha ao calcular o progresso dos módulos", error);
+      }
+    };
+    void loadProgress();
+    return () => { active = false; };
+  }, [userId]);
 
   return (
     <div className="page-container max-w-4xl lg:my-auto lg:-translate-y-4 lg:max-w-5xl">
@@ -1069,10 +1109,10 @@ const HomeScreen = ({ onNavigate }: { onNavigate: (s: Screen) => void }) => {
         <div className="rounded-2xl p-6" style={{ backgroundColor: "#E8D5C4", border: "1.5px solid #D4A574" }}>
           <div className="flex justify-between text-sm mb-2">
             <span style={{ color: "#6B4423" }}>Módulos concluídos</span>
-            <span className="font-semibold" style={{ color: "#A64D25" }}>2 de 4</span>
+            <span className="font-semibold" style={{ color: "#A64D25" }}>{moduleProgress.completed} de {moduleProgress.total}</span>
           </div>
-          <div className="h-3 rounded-full overflow-hidden" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Módulos concluídos" aria-valuemin={0} aria-valuemax={4} aria-valuenow={2}>
-            <div className="h-full rounded-full" style={{ width: "50%", backgroundColor: "#A64D25" }} />
+          <div className="h-3 overflow-hidden rounded-full" style={{ backgroundColor: "#D4A574" }} role="progressbar" aria-label="Módulos concluídos" aria-valuemin={0} aria-valuemax={moduleProgress.total} aria-valuenow={moduleProgress.completed}>
+            <div className="h-full rounded-full transition-all" style={{ width: `${moduleProgress.total ? moduleProgress.completed / moduleProgress.total * 100 : 0}%`, backgroundColor: "#A64D25" }} />
           </div>
           <p className="text-xs mt-2" style={{ color: "#6B4423" }}>Continue assim! Cada palavra aprendida é um passo na preservação da língua.</p>
         </div>
@@ -1379,9 +1419,11 @@ const ModulesScreen = ({ onSelectModule }: { onSelectModule: (module: LearningMo
 
 const ModuleContentScreen = ({
   module,
+  userId,
   onBack,
 }: {
   module: LearningModule;
+  userId: string;
   onBack: () => void;
 }) => {
   const [words, setWords] = useState<LearningWord[]>([]);
@@ -1457,6 +1499,13 @@ const ModuleContentScreen = ({
 
   const word = words[index];
   const audioUrl = word ? getValidAudioUrl(word.audio_url) : null;
+
+  useEffect(() => {
+    if (!word) return;
+    recordWordView(userId, word.id).catch((error) => {
+      console.error("[Tanu-Tyura] Não foi possível registrar a visualização da palavra", error);
+    });
+  }, [userId, word?.id]);
 
   const handleAudio = async () => {
     if (!audioUrl) return;
@@ -2553,11 +2602,11 @@ export default function App() {
       onDismissNotice={clearAppNotice}
       error={appError}
     >
-      {screen === "home" && <HomeScreen onNavigate={navigateTo} />}
+      {screen === "home" && <HomeScreen userId={session.user.id} onNavigate={navigateTo} />}
       {screen === "dictionary" && <DictionaryScreen />}
       {screen === "modules" && <ModulesScreen onSelectModule={handleSelectModule} />}
       {screen === "module-content" && selectedModule && (
-        <ModuleContentScreen module={selectedModule} onBack={() => setScreen("modules")} />
+        <ModuleContentScreen module={selectedModule} userId={session.user.id} onBack={() => setScreen("modules")} />
       )}
       {screen === "activities" && <ActivitiesScreen onSelectActivity={handleSelectActivity} />}
       {screen === "question" && selectedActivity && (
