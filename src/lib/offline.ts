@@ -263,78 +263,106 @@ export const keepAttemptPending = async (attempt: OfflineAttempt, errorMessage: 
 };
 
 
-// Word views are stored per authenticated user and remain pending until the
-// server confirms synchronization. Existing activity attempts are untouched.
-export const saveWordView = async (userId: string, wordId: number) => {
-  const database = await openDatabase();
-  const transaction = database.transaction("wordViews", "readwrite");
-  const store = transaction.objectStore("wordViews");
-  const key: [string, number] = [userId, wordId];
-  const result = await new Promise<StoredWordView>((resolve, reject) => {
-    const request = store.get(key);
-    request.onsuccess = () => {
-      const existing = request.result as StoredWordView | undefined;
-      const current = existing ?? {
-        usuario_id: userId,
-        palavra_id: wordId,
-        visualizada_em: new Date().toISOString(),
-        status: "pending" as const,
-      };
-      if (!existing) store.add(current);
-      resolve(current);
-    };
-    request.onerror = () => reject(request.error ?? new Error("Não foi possível registrar a palavra localmente."));
-  });
-  await transactionToPromise(transaction);
-  database.close();
-  return result;
-};
+// Word views are stored per authenticated user and remain pending until the server confirms synchronization.
+export const saveWordView = (userId: string, wordId: number) =>
+  (async () => {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction("wordViews", "readwrite");
+      const completed = transactionToPromise(transaction);
+      const store = transaction.objectStore("wordViews");
+      const key: [string, number] = [userId, wordId];
+      const wordViewPromise = new Promise<StoredWordView>((resolve, reject) => {
+        const request = store.get(key);
+        request.onsuccess = () => {
+          const existing = request.result as StoredWordView | undefined;
+          const current = existing ?? {
+            usuario_id: userId,
+            palavra_id: wordId,
+            visualizada_em: new Date().toISOString(),
+            status: "pending" as const,
+          };
+          if (!existing) store.add(current);
+          resolve(current);
+        };
+        request.onerror = () => reject(request.error ?? new Error("Não foi possível registrar a palavra localmente."));
+      });
+      const [wordView] = await Promise.all([wordViewPromise, completed]);
+      return wordView;
+    } finally {
+      database.close();
+    }
+  })();
 
 export const getViewedWordIds = async (userId: string) => {
   const database = await openDatabase();
-  const transaction = database.transaction("wordViews", "readonly");
-  const ids = await requestToPromise(
-    transaction.objectStore("wordViews").index("usuario_id").getAll(IDBKeyRange.only(userId)),
-  ) as StoredWordView[];
-  await transactionToPromise(transaction);
-  database.close();
-  return new Set(ids.map((item) => item.palavra_id));
+  try {
+    const transaction = database.transaction("wordViews", "readonly");
+    const completed = transactionToPromise(transaction);
+    const [wordViews] = await Promise.all([
+      requestToPromise(transaction.objectStore("wordViews").index("usuario_id").getAll(IDBKeyRange.only(userId))) as Promise<StoredWordView[]>,
+      completed,
+    ]);
+    return new Set(wordViews.map((item) => item.palavra_id));
+  } finally {
+    database.close();
+  }
 };
 
 export const getPendingWordViews = async (userId: string) => {
   const database = await openDatabase();
-  const transaction = database.transaction("wordViews", "readonly");
-  const items = await requestToPromise(
-    transaction.objectStore("wordViews").index("usuario_status").getAll(
-      IDBKeyRange.only([userId, "pending"]),
-    ),
-  ) as StoredWordView[];
-  await transactionToPromise(transaction);
-  database.close();
-  return items.sort((a, b) => a.visualizada_em.localeCompare(b.visualizada_em));
+  try {
+    const transaction = database.transaction("wordViews", "readonly");
+    const completed = transactionToPromise(transaction);
+    const [items] = await Promise.all([
+      requestToPromise(transaction.objectStore("wordViews").index("usuario_status").getAll(
+        IDBKeyRange.only([userId, "pending"]),
+      )) as Promise<StoredWordView[]>,
+      completed,
+    ]);
+    return items.sort((a, b) => a.visualizada_em.localeCompare(b.visualizada_em));
+  } finally {
+    database.close();
+  }
 };
 
 export const markWordViewsPending = async (userId: string) => {
   const database = await openDatabase();
-  const transaction = database.transaction("wordViews", "readwrite");
-  const store = transaction.objectStore("wordViews");
-  const items = await requestToPromise(
-    store.index("usuario_id").getAll(IDBKeyRange.only(userId)),
-  ) as StoredWordView[];
-  items.forEach((item) => store.put({ ...item, status: "pending", sincronizada_em: undefined }));
-  await transactionToPromise(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction("wordViews", "readwrite");
+    const completed = transactionToPromise(transaction);
+    const store = transaction.objectStore("wordViews");
+    const request = store.index("usuario_id").getAll(IDBKeyRange.only(userId));
+    request.onsuccess = () => {
+      (request.result as StoredWordView[]).forEach((item) => store.put({
+        ...item,
+        status: "pending",
+        sincronizada_em: undefined,
+      } satisfies StoredWordView));
+    };
+    await completed;
+  } finally {
+    database.close();
+  }
 };
 
 export const markWordViewsSynced = async (items: StoredWordView[]) => {
   if (items.length === 0) return;
   const database = await openDatabase();
-  const transaction = database.transaction("wordViews", "readwrite");
-  const store = transaction.objectStore("wordViews");
-  const synchronizedAt = new Date().toISOString();
-  items.forEach((item) => store.put({ ...item, status: "synced", sincronizada_em: synchronizedAt }));
-  await transactionToPromise(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction("wordViews", "readwrite");
+    const completed = transactionToPromise(transaction);
+    const store = transaction.objectStore("wordViews");
+    const synchronizedAt = new Date().toISOString();
+    items.forEach((item) => store.put({
+      ...item,
+      status: "synced",
+      sincronizada_em: synchronizedAt,
+    } satisfies StoredWordView));
+    await completed;
+  } finally {
+    database.close();
+  }
 };
 
 export const mergeSyncedWordViews = async (
@@ -343,20 +371,23 @@ export const mergeSyncedWordViews = async (
 ) => {
   if (items.length === 0) return;
   const database = await openDatabase();
-  const transaction = database.transaction("wordViews", "readwrite");
-  const store = transaction.objectStore("wordViews");
-  const synchronizedAt = new Date().toISOString();
-  items.forEach((item) => store.put({
-    usuario_id: userId,
-    palavra_id: item.palavra_id,
-    visualizada_em: item.visualizada_em,
-    status: "synced",
-    sincronizada_em: synchronizedAt,
-  } satisfies StoredWordView));
-  await transactionToPromise(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction("wordViews", "readwrite");
+    const completed = transactionToPromise(transaction);
+    const store = transaction.objectStore("wordViews");
+    const synchronizedAt = new Date().toISOString();
+    items.forEach((item) => store.put({
+      usuario_id: userId,
+      palavra_id: item.palavra_id,
+      visualizada_em: item.visualizada_em,
+      status: "synced",
+      sincronizada_em: synchronizedAt,
+    } satisfies StoredWordView));
+    await completed;
+  } finally {
+    database.close();
+  }
 };
-
 
 /** Atomically refreshes all public learning content without touching pending attempts or word views. */
 export const replaceAllOfflineContent = async (
