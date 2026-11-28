@@ -416,3 +416,25 @@ export const replaceAllOfflineContent = async (
     database.close();
   }
 };
+
+
+/** Atomically refreshes module and word cache without affecting activities, attempts or progress. */
+export const replaceCachedLearningContent = async (
+  modules: CachedModule[],
+  words: CachedWord[],
+) => {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(["modules", "words"], "readwrite");
+    const completed = transactionToPromise(transaction);
+    const moduleStore = transaction.objectStore("modules");
+    const wordStore = transaction.objectStore("words");
+    moduleStore.clear();
+    wordStore.clear();
+    modules.forEach((module) => moduleStore.put(module));
+    words.forEach((word) => wordStore.put(word));
+    await completed;
+  } finally {
+    database.close();
+  }
+};
