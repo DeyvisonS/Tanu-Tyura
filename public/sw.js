@@ -1,4 +1,4 @@
-const CACHE_NAME = "tanu-tyura-shell-v3";
+const CACHE_NAME = "tanu-tyura-shell-v4";
 const APP_ROOT = new URL("./", self.registration.scope).toString();
 const PUBLIC_ASSET_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
 
@@ -73,21 +73,21 @@ self.addEventListener("fetch", (event) => {
           }
           return response;
         })
-        .catch(async () => (await caches.match(APP_ROOT)) || Response.error()),
+        .catch(async () => {
+          const cache = await caches.open(CACHE_NAME);
+          return (await cache.match(APP_ROOT)) || Response.error();
+        }),
     );
     return;
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => {
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(request);
       if (cached) return cached;
-      return fetch(request).then(async (response) => {
-        if (isCacheableResponse(response)) {
-          const cache = await caches.open(CACHE_NAME);
-          await cache.put(request, response.clone());
-        }
-        return response;
-      });
+      const response = await fetch(request);
+      if (isCacheableResponse(response)) await cache.put(request, response.clone());
+      return response;
     }),
   );
 });
