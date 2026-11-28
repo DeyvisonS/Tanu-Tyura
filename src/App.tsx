@@ -23,6 +23,7 @@ import {
 import type { OfflineAttempt } from "./lib/offline";
 import { calculateModuleProgress } from "./lib/moduleProgress";
 import { recordWordView, syncWordProgress } from "./lib/wordProgress";
+import { isOfflineShellReady } from "./lib/offlineRuntime";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2346,21 +2347,25 @@ export default function App() {
             message: "Preparando conteúdos para uso offline…",
           });
           await preloadOfflineContent();
-          setOfflinePreparation({
-            state: "ready",
-            message: "Uso offline disponível.",
-          });
-        } else {
-          const summary = await inspectOfflineContent();
+          const shellReady = await isOfflineShellReady();
           setOfflinePreparation(
-            summary.complete
-              ? {
-                  state: "local-ready",
-                  message: "Tanu-Tyura pronto para uso offline com os conteúdos armazenados neste dispositivo.",
-                }
+            shellReady
+              ? { state: "ready", message: "Conteúdos e aplicativo preparados para uso offline neste dispositivo." }
+              : { state: "local-incomplete", message: "Os conteúdos foram armazenados, mas o Service Worker ainda não está ativo para reabrir o aplicativo sem conexão." },
+          );
+        } else {
+          const [summary, shellReady] = await Promise.all([
+            inspectOfflineContent(),
+            isOfflineShellReady(),
+          ]);
+          setOfflinePreparation(
+            summary.complete && shellReady
+              ? { state: "local-ready", message: "Tanu-Tyura pronto para uso offline com o aplicativo e os conteúdos armazenados neste dispositivo." }
               : {
                   state: "local-incomplete",
-                  message: "Alguns conteúdos ainda não estão disponíveis offline neste dispositivo.",
+                  message: !shellReady
+                    ? "O aplicativo não confirmou o armazenamento necessário para reabertura offline neste dispositivo."
+                    : "Alguns conteúdos ainda não estão disponíveis offline neste dispositivo.",
                 },
           );
         }
@@ -2388,6 +2393,15 @@ export default function App() {
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isOnline || !session?.user.id) return;
+    syncWordProgress(session.user.id).then((result) => {
+      if (result.error) console.error("[Tanu-Tyura] Não foi possível sincronizar o progresso dos módulos", result.error);
+    }).catch((error) => {
+      console.error("[Tanu-Tyura] Falha inesperada ao sincronizar o progresso dos módulos", error);
+    });
+  }, [isOnline, session?.user.id]);
 
   const refreshPendingCount = useCallback(async () => {
     if (!session?.user.id) {
